@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from collections import defaultdict
 from decimal import Decimal
 from typing import Sequence
 
@@ -272,42 +271,3 @@ def net_for(expense: Expense, user_id: uuid.UUID) -> Decimal:
     """Positive when this expense leaves the user owed money."""
     paid = expense.amount if expense.paid_by_id == user_id else ZERO
     return (paid - expense.share_for(user_id)).quantize(Decimal("0.01"))
-
-
-def balances_for_user(
-    db: Session, user_id: uuid.UUID, *, group_id: uuid.UUID | None = None
-) -> dict[uuid.UUID, Decimal]:
-    """Net position against every other person, from every visible expense.
-
-    Positive means they owe the caller. This is a plain derivation from expense
-    splits; settlements land in a later milestone and will offset these figures.
-    """
-    conditions = [_visible_to(user_id)]
-    if group_id is not None:
-        conditions.append(Expense.group_id == group_id)
-
-    expenses = db.scalars(
-        select(Expense).options(selectinload(Expense.splits)).where(*conditions)
-    ).all()
-
-    balances: dict[uuid.UUID, Decimal] = defaultdict(lambda: ZERO)
-
-    for expense in expenses:
-        payer = expense.paid_by_id
-
-        if payer == user_id:
-            # Everyone else's share of something the caller paid for is owed to them.
-            for split in expense.splits:
-                if split.user_id != user_id:
-                    balances[split.user_id] += split.amount
-        else:
-            # The caller's share of something someone else paid for is a debt.
-            own_share = expense.share_for(user_id)
-            if own_share:
-                balances[payer] -= own_share
-
-    return {
-        other_id: amount.quantize(Decimal("0.01"))
-        for other_id, amount in balances.items()
-        if amount != ZERO
-    }

@@ -6,6 +6,7 @@ from app.models.friendship import Friendship, FriendshipStatus
 from app.models.group import Group, GroupMember, GroupRole
 from app.models.invitation import Invitation, InvitationStatus
 from app.models.refresh_token import RefreshToken
+from app.models.settlement import PaymentMethod, Settlement
 from app.models.user import User
 
 __all__ = [
@@ -20,7 +21,9 @@ __all__ = [
     "GroupRole",
     "Invitation",
     "InvitationStatus",
+    "PaymentMethod",
     "RefreshToken",
+    "Settlement",
     "SplitType",
     "User",
 ]

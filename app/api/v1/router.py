@@ -2,7 +2,18 @@
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, currencies, expenses, friends, groups, health, users
+from app.api.v1.endpoints import (
+    activity,
+    auth,
+    balances,
+    currencies,
+    expenses,
+    friends,
+    groups,
+    health,
+    settlements,
+    users,
+)
 
 api_router = APIRouter()
 api_router.include_router(health.router)
@@ -15,3 +26,6 @@ api_router.include_router(users.router)
 api_router.include_router(friends.router)
 api_router.include_router(groups.router)
 api_router.include_router(expenses.router)
+api_router.include_router(balances.router)
+api_router.include_router(settlements.router)
+api_router.include_router(activity.router)

@@ -597,6 +597,8 @@ class TestDelete:
 
 
 class TestBalances:
+    """Ported to /balances/me, which reports per currency rather than one figure."""
+
     def test_reflects_who_paid(
         self, client: TestClient, alice: Actor, bob: Actor, make_group
     ) -> None:
@@ -607,14 +609,16 @@ class TestBalances:
             headers=alice.headers,
         )
 
-        alice_view = client.get("/api/v1/expenses/balances", headers=alice.headers).json()
-        assert Decimal(alice_view["total_owed_to_you"]) == Decimal("30.00")
-        assert Decimal(alice_view["net"]) == Decimal("30.00")
-        assert alice_view["entries"][0]["user"]["id"] == bob.id
+        alice_view = client.get("/api/v1/balances/me", headers=alice.headers).json()
+        usd = next(row for row in alice_view["totals"] if row["currency"] == "USD")
+        assert Decimal(usd["owed_to_you"]) == Decimal("30.00")
+        assert Decimal(usd["net"]) == Decimal("30.00")
+        assert alice_view["people"][0]["user"]["id"] == bob.id
 
-        bob_view = client.get("/api/v1/expenses/balances", headers=bob.headers).json()
-        assert Decimal(bob_view["total_you_owe"]) == Decimal("30.00")
-        assert Decimal(bob_view["net"]) == Decimal("-30.00")
+        bob_view = client.get("/api/v1/balances/me", headers=bob.headers).json()
+        usd = next(row for row in bob_view["totals"] if row["currency"] == "USD")
+        assert Decimal(usd["you_owe"]) == Decimal("30.00")
+        assert Decimal(usd["net"]) == Decimal("-30.00")
 
     def test_opposite_expenses_cancel_out(
         self, client: TestClient, alice: Actor, bob: Actor, make_group
@@ -631,9 +635,9 @@ class TestBalances:
             headers=bob.headers,
         )
 
-        view = client.get("/api/v1/expenses/balances", headers=alice.headers).json()
-        assert Decimal(view["net"]) == Decimal("0.00")
-        assert view["entries"] == []
+        view = client.get("/api/v1/balances/me", headers=alice.headers).json()
+        assert view["totals"] == []
+        assert view["people"] == []
 
     def test_can_be_scoped_to_one_group(
         self, client: TestClient, alice: Actor, bob: Actor, make_group
@@ -652,14 +656,15 @@ class TestBalances:
         )
 
         scoped = client.get(
-            "/api/v1/expenses/balances", params={"group_id": second["id"]}, headers=alice.headers
+            f"/api/v1/balances/groups/{second['id']}", headers=alice.headers
         ).json()
-        assert Decimal(scoped["net"]) == Decimal("10.00")
+        assert Decimal(scoped["your_net"]) == Decimal("10.00")
 
-        overall = client.get("/api/v1/expenses/balances", headers=alice.headers).json()
-        assert Decimal(overall["net"]) == Decimal("40.00")
+        overall = client.get("/api/v1/balances/me", headers=alice.headers).json()
+        usd = next(row for row in overall["totals"] if row["currency"] == "USD")
+        assert Decimal(usd["net"]) == Decimal("40.00")
 
     def test_starts_empty(self, client: TestClient, alice: Actor) -> None:
-        view = client.get("/api/v1/expenses/balances", headers=alice.headers).json()
-        assert Decimal(view["net"]) == Decimal("0.00")
-        assert view["entries"] == []
+        view = client.get("/api/v1/balances/me", headers=alice.headers).json()
+        assert view["totals"] == []
+        assert view["people"] == []

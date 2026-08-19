@@ -10,8 +10,6 @@ from app.api.deps import ActiveUser, DbSession
 from app.models.expense import Expense
 from app.schemas.common import Message
 from app.schemas.expense import (
-    BalanceEntry,
-    BalanceSummary,
     ExpenseCreate,
     ExpenseListPage,
     ExpenseRead,
@@ -21,7 +19,6 @@ from app.schemas.expense import (
 from app.schemas.user import UserRead
 from app.services import expense as expense_service
 from app.services import group as group_service
-from app.services import user as user_service
 
 router = APIRouter(prefix="/expenses", tags=["expenses"])
 
@@ -97,50 +94,6 @@ def create_expense(
     """
     expense = expense_service.create(db, current_user, payload)
     return to_expense_read(expense, current_user.id)
-
-
-@router.get("/balances", response_model=BalanceSummary, summary="Who owes whom")
-def read_balances(
-    db: DbSession,
-    current_user: ActiveUser,
-    group_id: Annotated[uuid.UUID | None, Query(description="Restrict to one group.")] = None,
-) -> BalanceSummary:
-    """Derived from expense splits alone; settlements arrive in a later milestone."""
-    if group_id is not None:
-        group = group_service.get_or_404(db, group_id)
-        group_service.require_membership(group, current_user.id)
-
-    balances = expense_service.balances_for_user(db, current_user.id, group_id=group_id)
-
-    entries: list[BalanceEntry] = []
-    owed_to_you = ZERO
-    you_owe = ZERO
-
-    for other_id, amount in balances.items():
-        other = user_service.get_by_id(db, other_id)
-        if other is None:
-            continue
-        entries.append(
-            BalanceEntry(
-                user=UserRead.model_validate(other),
-                amount=amount,
-                currency=current_user.currency,
-            )
-        )
-        if amount > 0:
-            owed_to_you += amount
-        else:
-            you_owe += -amount
-
-    entries.sort(key=lambda entry: entry.amount, reverse=True)
-
-    return BalanceSummary(
-        currency=current_user.currency,
-        total_owed_to_you=owed_to_you,
-        total_you_owe=you_owe,
-        net=owed_to_you - you_owe,
-        entries=entries,
-    )
 
 
 @router.get("/{expense_id}", response_model=ExpenseRead, summary="Expense detail")

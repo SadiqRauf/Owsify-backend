@@ -115,6 +115,55 @@ tests/           pytest suite
 ```
 
 
+### The balance engine
+
+`app/services/balance.py` is where every statement about who owes whom comes from.
+Three properties are maintained deliberately, because breaking any of them shows up
+as money that has silently appeared or vanished:
+
+1. **Integer cents.** No float touches a balance. Decimal in, cents through the
+   arithmetic, Decimal out.
+2. **Per currency.** Balances are never summed across currencies. Two people can owe
+   each other in USD and EUR simultaneously and both are true; adding them would
+   produce a number with no meaning. There is deliberately no combined total.
+3. **Zero sum.** Within one currency and scope, every ledger sums to zero.
+   `Ledger.assert_consistent()` states this and the test suite exercises it against
+   randomly generated webs of debt.
+
+The ledger stores **one signed number per pair** rather than two directed ones, so
+the two directions cannot disagree. It is recomputed from the transactions on each
+request rather than cached on a row: a stored balance drifts from its transactions
+after an edit or delete, and a wrong balance that looks authoritative is worse than
+a slow one.
+
+**Debt simplification** (`GET /balances/groups/{id}/simplified`) reduces a web of
+debts to the fewest transfers that settle everyone, by repeatedly matching the
+largest debtor with the largest creditor. For the brief's example:
+
+    Ali owes Sadiq $50, Ahmed owes Ali $30
+    -> nets: Sadiq +50, Ali -20, Ahmed -30
+    -> Ahmed pays Sadiq $30, Ali pays Sadiq $20
+
+This deliberately reassigns who pays whom — Ahmed never borrowed from Sadiq
+directly — which is why it is a separate view rather than a replacement for the
+real pairwise debts.
+
+### Settlements
+
+A settlement is not an expense. An expense creates debt and divides between people;
+a settlement discharges debt and moves money one way. They are separate tables so
+no balance query has to remember which rows to treat differently.
+
+Deleting a settlement restores the debt it discharged, because the balance is
+derived rather than stored.
+
+### Activity
+
+`GET /activity` merges expenses and settlements into one feed, derived from those
+tables rather than an append-only log. A derived feed can never describe something
+that no longer exists; the cost is that only current state is visible, so a deleted
+expense leaves the feed and edits show new values rather than a change history.
+
 ### Permissions
 
 - A **group** is invisible to non-members: they get 404, not 403, so ids cannot be

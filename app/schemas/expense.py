@@ -161,19 +161,3 @@ class ExpenseListPage(BaseModel):
     total: int
     limit: int
     offset: int
-
-
-class BalanceEntry(BaseModel):
-    """Net position between the caller and one other person."""
-
-    user: UserRead
-    amount: Decimal = Field(description="Positive: they owe you. Negative: you owe them.")
-    currency: str
-
-
-class BalanceSummary(BaseModel):
-    currency: str
-    total_owed_to_you: Decimal
-    total_you_owe: Decimal
-    net: Decimal
-    entries: list[BalanceEntry]

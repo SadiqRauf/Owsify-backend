@@ -7,8 +7,6 @@ from app.schemas.auth import (
 )
 from app.schemas.common import CurrencyList, ErrorResponse, HealthStatus, Message
 from app.schemas.expense import (
-    BalanceEntry,
-    BalanceSummary,
     ExpenseCreate,
     ExpenseListPage,
     ExpenseRead,
@@ -36,8 +34,6 @@ from app.schemas.user import PasswordChange, UserCreate, UserRead, UserUpdate
 
 __all__ = [
     "AuthResponse",
-    "BalanceEntry",
-    "BalanceSummary",
     "CurrencyList",
     "ErrorResponse",
     "ExpenseCreate",
