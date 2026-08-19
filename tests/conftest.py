@@ -22,6 +22,7 @@ from app.models import (  # noqa: F401 — registers the tables
     Friendship,
     Group,
     GroupMember,
+    Invitation,
     RefreshToken,
     User,
 )
@@ -186,7 +187,7 @@ def _reset_tables(db: Session) -> Generator[None, None, None]:
     db.execute(
         text(
             "TRUNCATE expense_splits, expenses, group_members, groups, "
-            "friendships, refresh_tokens, users RESTART IDENTITY CASCADE"
+            "friendships, invitations, refresh_tokens, users RESTART IDENTITY CASCADE"
         )
     )
     db.commit()

@@ -17,6 +17,7 @@ alembic==1.14.0
 
 # --- Auth ---
 PyJWT==2.10.1
+certifi==2024.12.14
 bcrypt==4.2.1
 
 # --- Dev / test ---

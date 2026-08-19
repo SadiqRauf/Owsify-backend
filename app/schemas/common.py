@@ -34,3 +34,10 @@ class HealthStatus(BaseModel):
     environment: str
     database: str = Field(examples=["connected"])
     details: dict[str, Any] = {}
+
+
+class CurrencyList(BaseModel):
+    """Reference data: which currency codes the API will accept."""
+
+    default: str = Field(examples=["USD"])
+    codes: list[str]

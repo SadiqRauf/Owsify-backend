@@ -5,7 +5,7 @@ from app.schemas.auth import (
     RefreshRequest,
     TokenPair,
 )
-from app.schemas.common import ErrorResponse, HealthStatus, Message
+from app.schemas.common import CurrencyList, ErrorResponse, HealthStatus, Message
 from app.schemas.expense import (
     BalanceEntry,
     BalanceSummary,
@@ -31,12 +31,14 @@ from app.schemas.group import (
     GroupRead,
     GroupUpdate,
 )
+from app.schemas.invitation import InvitationCreate, InvitationRead
 from app.schemas.user import PasswordChange, UserCreate, UserRead, UserUpdate
 
 __all__ = [
     "AuthResponse",
     "BalanceEntry",
     "BalanceSummary",
+    "CurrencyList",
     "ErrorResponse",
     "ExpenseCreate",
     "ExpenseListPage",
@@ -54,6 +56,8 @@ __all__ = [
     "GroupRead",
     "GroupUpdate",
     "HealthStatus",
+    "InvitationCreate",
+    "InvitationRead",
     "LoginRequest",
     "LogoutRequest",
     "Message",

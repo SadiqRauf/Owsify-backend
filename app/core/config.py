@@ -46,6 +46,24 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     BCRYPT_ROUNDS: int = 12
 
+    # --- Email ---
+    # "console" logs the message, "file" writes .eml files, "smtp" really sends.
+    EMAIL_BACKEND: Literal["console", "file", "smtp"] = "console"
+    EMAIL_FROM: str = "Splitwise <no-reply@splitwise.local>"
+    EMAIL_FILE_PATH: str = "./sent-emails"
+    SMTP_HOST: str = "localhost"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_USE_TLS: bool = True
+    SMTP_USE_SSL: bool = False
+    SMTP_TIMEOUT_SECONDS: int = 10
+
+    # --- Invitations ---
+    # Where the invite link points, i.e. the web app rather than the API.
+    FRONTEND_URL: str = "http://localhost:5173"
+    INVITATION_EXPIRE_DAYS: int = 14
+
     # --- CORS ---
     # NoDecode stops pydantic-settings from JSON-parsing the raw value, so the
     # validator below can accept a plain comma-separated list in .env.

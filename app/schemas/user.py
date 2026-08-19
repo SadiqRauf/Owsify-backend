@@ -5,6 +5,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.core.currencies import DEFAULT_CURRENCY, normalise_currency
 from app.core.security import MAX_PASSWORD_BYTES
 
 PASSWORD_RULES = (
@@ -25,7 +26,7 @@ def _validate_password_strength(value: str) -> str:
 class UserBase(BaseModel):
     email: EmailStr
     full_name: str = Field(min_length=1, max_length=120)
-    currency: str = Field(default="USD", min_length=3, max_length=3)
+    currency: str = Field(default=DEFAULT_CURRENCY, min_length=3, max_length=3)
 
     @field_validator("full_name")
     @classmethod
@@ -37,8 +38,8 @@ class UserBase(BaseModel):
 
     @field_validator("currency")
     @classmethod
-    def _upper_currency(cls, value: str) -> str:
-        return value.upper()
+    def _check_currency(cls, value: str) -> str:
+        return normalise_currency(value)
 
 
 class UserCreate(UserBase):
@@ -66,8 +67,8 @@ class UserUpdate(BaseModel):
 
     @field_validator("currency")
     @classmethod
-    def _upper_currency(cls, value: str | None) -> str | None:
-        return value.upper() if value else value
+    def _check_currency(cls, value: str | None) -> str | None:
+        return normalise_currency(value) if value else value
 
 
 class PasswordChange(BaseModel):

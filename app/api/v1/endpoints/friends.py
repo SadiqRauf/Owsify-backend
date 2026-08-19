@@ -3,7 +3,7 @@
 import uuid
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, BackgroundTasks, Query, status
 
 from app.api.deps import ActiveUser, DbSession
 from app.schemas.common import Message
@@ -13,10 +13,29 @@ from app.schemas.friendship import (
     FriendSummary,
     UserSearchResult,
 )
+from app.core.config import settings
+from app.schemas.invitation import InvitationCreate, InvitationRead
 from app.schemas.user import UserRead
 from app.services import friendship as friendship_service
+from app.services import invitation as invitation_service
 
 router = APIRouter(prefix="/friends", tags=["friends"])
+
+
+def _delivery_mode() -> str:
+    """How outbound mail is currently handled, mirrored to the client verbatim."""
+    return {"smtp": "email", "file": "file"}.get(settings.EMAIL_BACKEND, "console")
+
+
+def _invitation_read(invitation: object) -> InvitationRead:
+    """Serialise an invitation and stamp on how mail is currently being handled.
+
+    `delivery` is not a column, so it is set after validation rather than passed
+    into model_validate, which takes no update argument.
+    """
+    return InvitationRead.model_validate(invitation).model_copy(
+        update={"delivery": _delivery_mode()}
+    )
 
 
 def _to_read(friendship, viewer_id: uuid.UUID) -> FriendshipRead:
@@ -104,6 +123,70 @@ def cancel_request(friendship_id: uuid.UUID, db: DbSession, current_user: Active
     friendship = friendship_service.get_or_404(db, friendship_id)
     friendship_service.cancel_request(db, friendship, current_user.id)
     return Message(message="Request withdrawn.")
+
+
+# --------------------------------------------------------------------------- #
+# Invitations — for people who are not on Splitwise yet
+# --------------------------------------------------------------------------- #
+@router.get(
+    "/invitations", response_model=list[InvitationRead], summary="Invitations you have sent"
+)
+def list_invitations(db: DbSession, current_user: ActiveUser) -> list[InvitationRead]:
+    return [
+        _invitation_read(invitation)
+        for invitation in invitation_service.list_sent(db, current_user.id)
+    ]
+
+
+@router.post(
+    "/invitations",
+    response_model=InvitationRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Invite someone by email",
+)
+def send_invitation(
+    payload: InvitationCreate,
+    db: DbSession,
+    current_user: ActiveUser,
+    background_tasks: BackgroundTasks,
+) -> InvitationRead:
+    """Email an invite to an address that has no account yet.
+
+    When they register with that address they are connected to you automatically.
+    If an account already exists this returns 409 with detail type `account_exists`,
+    so the client can offer a friend request instead.
+    """
+    invitation = invitation_service.create(db, current_user, str(payload.email), payload.message)
+
+    # Sending happens after the response, so a slow mail server never delays the UI.
+    background_tasks.add_task(invitation_service.deliver, invitation, current_user)
+
+    return _invitation_read(invitation)
+
+
+@router.post(
+    "/invitations/{invitation_id}/resend",
+    response_model=InvitationRead,
+    summary="Send an invitation again",
+)
+def resend_invitation(
+    invitation_id: uuid.UUID,
+    db: DbSession,
+    current_user: ActiveUser,
+    background_tasks: BackgroundTasks,
+) -> InvitationRead:
+    """Also pushes the expiry out by the configured window."""
+    invitation = invitation_service.resend(db, invitation_id, current_user.id)
+    background_tasks.add_task(invitation_service.deliver, invitation, current_user)
+    return _invitation_read(invitation)
+
+
+@router.delete(
+    "/invitations/{invitation_id}", response_model=Message, summary="Cancel an invitation"
+)
+def cancel_invitation(invitation_id: uuid.UUID, db: DbSession, current_user: ActiveUser) -> Message:
+    invitation_service.cancel(db, invitation_id, current_user.id)
+    return Message(message="Invitation cancelled.")
 
 
 @router.delete("/{user_id}", response_model=Message, summary="Remove a friend")

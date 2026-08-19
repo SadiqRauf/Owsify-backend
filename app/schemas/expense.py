@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.currencies import DEFAULT_CURRENCY, normalise_currency
 from app.models.expense import ExpenseCategory, SplitType
 from app.schemas.user import UserRead
 
@@ -36,7 +37,7 @@ class SplitParticipant(BaseModel):
 class ExpenseBase(BaseModel):
     description: str = Field(min_length=1, max_length=200)
     amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
-    currency: str = Field(default="USD", min_length=3, max_length=3)
+    currency: str = Field(default=DEFAULT_CURRENCY, min_length=3, max_length=3)
     expense_date: date
     category: ExpenseCategory = ExpenseCategory.GENERAL
     notes: str | None = Field(default=None, max_length=2000)
@@ -51,8 +52,8 @@ class ExpenseBase(BaseModel):
 
     @field_validator("currency")
     @classmethod
-    def _upper_currency(cls, value: str) -> str:
-        return value.upper()
+    def _check_currency(cls, value: str) -> str:
+        return normalise_currency(value)
 
     @field_validator("expense_date")
     @classmethod
@@ -109,8 +110,8 @@ class ExpenseUpdate(BaseModel):
 
     @field_validator("currency")
     @classmethod
-    def _upper_currency(cls, value: str | None) -> str | None:
-        return value.upper() if value else value
+    def _check_currency(cls, value: str | None) -> str | None:
+        return normalise_currency(value) if value else value
 
     @model_validator(mode="after")
     def _splits_come_with_a_type(self) -> "ExpenseUpdate":
