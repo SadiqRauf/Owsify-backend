@@ -19,7 +19,7 @@
 * **Database:** PostgreSQL / MongoDB
 
 
-# Splitwise Clone — Backend
+# Owsify — Backend
 
 FastAPI + PostgreSQL + SQLAlchemy 2.0 + Alembic, with JWT authentication.
 
@@ -176,8 +176,11 @@ group has not spent it all.
 (the caller's default unless they say otherwise). Balances still span currencies, so
 a single-currency dashboard never hides money.
 
-Monthly series return quiet months as zero rather than omitting them, so a chart
-gets an even time axis instead of silently compressing gaps.
+`spending_series` handles both granularities through one query and one gap-filling
+loop, so a daily and a monthly view of the same window cannot disagree about the
+total. Empty buckets are returned as zero rather than omitted, so a chart gets an
+even time axis instead of silently compressing gaps. `count` defaults to 30 days or
+6 months, and each granularity clamps to its own maximum (366 days, 60 months).
 
 ### Production
 

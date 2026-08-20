@@ -19,6 +19,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from enum import StrEnum
 
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -48,12 +49,28 @@ class CategoryTotal:
     expense_count: int
 
 
+class Granularity(StrEnum):
+    DAILY = "daily"
+    MONTHLY = "monthly"
+
+
 @dataclass(frozen=True, slots=True)
-class MonthTotal:
-    month: str
-    """ISO year-month, e.g. "2026-08"."""
+class SeriesPoint:
+    """One bucket of the spending series."""
+
+    bucket: str
+    """`2026-08-20` for a day, `2026-08` for a month."""
+    start: date
+    """First day the bucket covers, for sorting and labelling."""
     amount: Decimal
     expense_count: int
+
+
+# How many buckets each granularity shows by default, and the most it will allow.
+SERIES_DEFAULTS: dict[Granularity, tuple[int, int]] = {
+    Granularity.DAILY: (30, 366),
+    Granularity.MONTHLY: (6, 60),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,30 +148,48 @@ def spending_by_category(
     return totals
 
 
-def monthly_spending(
+def _month_start(value: date) -> date:
+    return value.replace(day=1)
+
+
+def _shift_months(value: date, months: int) -> date:
+    total = value.year * 12 + (value.month - 1) + months
+    return date(total // 12, total % 12 + 1, 1)
+
+
+def spending_series(
     db: Session,
     user_id: uuid.UUID,
     currency: str,
     *,
-    months: int = 6,
+    granularity: Granularity = Granularity.DAILY,
+    count: int | None = None,
     group_id: uuid.UUID | None = None,
     today: date | None = None,
-) -> list[MonthTotal]:
-    """Your share per calendar month, oldest first.
+) -> list[SeriesPoint]:
+    """Your share per day or per month, oldest first.
 
-    Months with no activity are returned as zero rather than omitted, so the chart
-    has an even time axis instead of silently compressing quiet periods.
+    Empty buckets come back as zero rather than being omitted. Dropping them would
+    compress quiet stretches and make the shape of a period read as busier and more
+    even than it was.
+
+    Both granularities share one query and one gap-filling loop, so a daily and a
+    monthly chart of the same data can never disagree about the total.
     """
     anchor = today or date.today()
+    default_count, max_count = SERIES_DEFAULTS[granularity]
+    buckets = min(count or default_count, max_count)
 
-    # First day of the month, `months - 1` months back.
-    year, month = anchor.year, anchor.month
-    total_months = year * 12 + (month - 1) - (months - 1)
-    start = date(total_months // 12, total_months % 12 + 1, 1)
+    if granularity is Granularity.DAILY:
+        start = anchor - timedelta(days=buckets - 1)
+        bucket_expr = func.to_char(Expense.expense_date, "YYYY-MM-DD")
+    else:
+        start = _shift_months(_month_start(anchor), -(buckets - 1))
+        bucket_expr = func.to_char(Expense.expense_date, "YYYY-MM")
 
     statement = (
         select(
-            func.to_char(Expense.expense_date, "YYYY-MM").label("month"),
+            bucket_expr.label("bucket"),
             func.coalesce(func.sum(ExpenseSplit.amount), 0).label("total"),
             func.count(Expense.id).label("count"),
         )
@@ -163,26 +198,30 @@ def monthly_spending(
             ExpenseSplit.user_id == user_id,
             Expense.currency == currency,
             Expense.expense_date >= start,
+            Expense.expense_date <= anchor,
         )
-        .group_by("month")
+        .group_by("bucket")
     )
     if group_id is not None:
         statement = statement.where(Expense.group_id == group_id)
 
     found = {
-        row.month: (Decimal(row.total).quantize(Decimal("0.01")), row.count)
+        row.bucket: (Decimal(row.total).quantize(Decimal("0.01")), row.count)
         for row in db.execute(statement).all()
     }
 
-    series: list[MonthTotal] = []
-    cursor = start
-    for _ in range(months):
-        key = f"{cursor.year:04d}-{cursor.month:02d}"
-        amount, count = found.get(key, (ZERO, 0))
-        series.append(MonthTotal(month=key, amount=amount, expense_count=count))
-        cursor = (
-            date(cursor.year + 1, 1, 1) if cursor.month == 12
-            else date(cursor.year, cursor.month + 1, 1)
+    series: list[SeriesPoint] = []
+    for index in range(buckets):
+        if granularity is Granularity.DAILY:
+            current = start + timedelta(days=index)
+            key = current.isoformat()
+        else:
+            current = _shift_months(start, index)
+            key = f"{current.year:04d}-{current.month:02d}"
+
+        amount, expense_count = found.get(key, (ZERO, 0))
+        series.append(
+            SeriesPoint(bucket=key, start=current, amount=amount, expense_count=expense_count)
         )
     return series
 

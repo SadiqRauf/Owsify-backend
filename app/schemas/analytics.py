@@ -7,6 +7,7 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.expense import ExpenseCategory
+from app.services.analytics import Granularity
 from app.schemas.expense import ExpenseRead
 from app.schemas.settlement import CurrencyTotals, PersonBalance, SettlementRead
 
@@ -18,10 +19,21 @@ class CategorySpending(BaseModel):
     expense_count: int
 
 
-class MonthSpending(BaseModel):
-    month: str = Field(examples=["2026-08"], description="ISO year-month.")
+class SeriesPoint(BaseModel):
+    bucket: str = Field(
+        examples=["2026-08-20", "2026-08"],
+        description="ISO date for a daily bucket, ISO year-month for a monthly one.",
+    )
+    start: date = Field(description="First day the bucket covers.")
     amount: Decimal
     expense_count: int
+
+
+class SpendingSeries(BaseModel):
+    """Spending over time at one granularity, oldest first, gaps filled with zero."""
+
+    granularity: Granularity
+    points: list[SeriesPoint]
 
 
 class GroupRef(BaseModel):
@@ -70,7 +82,9 @@ class Dashboard(BaseModel):
     people: list[PersonBalance] = Field(description="Who owes whom, all currencies.")
 
     by_category: list[CategorySpending]
-    by_month: list[MonthSpending]
+    series: SpendingSeries = Field(
+        description="Spending over time at the requested granularity."
+    )
     by_group: list[GroupSpending]
 
     groups: list[GroupStatistics]

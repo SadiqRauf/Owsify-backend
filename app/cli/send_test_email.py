@@ -90,7 +90,7 @@ def _diagnose(error: Exception) -> str:
                 "To invite anyone else:\n"
                 "  1. Add and verify a domain at https://resend.com/domains\n"
                 "  2. Set EMAIL_FROM to an address on it, e.g.\n"
-                '     EMAIL_FROM="Splitwise <invites@yourdomain.com>"'
+                '     EMAIL_FROM="Owsify <invites@yourdomain.com>"'
             )
 
         if isinstance(error, smtplib.SMTPSenderRefused):
@@ -177,14 +177,14 @@ def main() -> int:
 
     message = Email(
         to=recipient,
-        subject="Splitwise test email",
+        subject="Owsify test email",
         text_body=(
-            "This is a test message from your local Splitwise backend.\n\n"
+            "This is a test message from your local Owsify backend.\n\n"
             "If you are reading this in a real inbox, SMTP is configured correctly "
             "and friend invitations will be delivered.\n"
         ),
         html_body=(
-            "<p>This is a test message from your local Splitwise backend.</p>"
+            "<p>This is a test message from your local Owsify backend.</p>"
             "<p>If you are reading this in a real inbox, SMTP is configured correctly "
             "and friend invitations will be delivered.</p>"
         ),

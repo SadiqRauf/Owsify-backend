@@ -17,7 +17,8 @@ from app.schemas.analytics import (
     GroupRef,
     GroupSpending,
     GroupStatistics,
-    MonthSpending,
+    SeriesPoint,
+    SpendingSeries,
 )
 from app.schemas.settlement import CurrencyTotals, PersonBalance, SettlementRead
 from app.schemas.user import UserRead
@@ -25,7 +26,7 @@ from app.services import analytics as analytics_service
 from app.services import balance as balance_service
 from app.services import group as group_service
 from app.services import user as user_service
-from app.services.analytics import DateRange
+from app.services.analytics import DateRange, Granularity
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -84,30 +85,65 @@ def read_category_spending(
     ]
 
 
-@router.get("/monthly", response_model=list[MonthSpending], summary="Spending by month")
-def read_monthly_spending(
+def _series(
+    db,
+    user,
+    currency: str,
+    granularity: Granularity,
+    count: int | None,
+    group_id: uuid.UUID | None = None,
+) -> SpendingSeries:
+    points = analytics_service.spending_series(
+        db,
+        user.id,
+        currency,
+        granularity=granularity,
+        count=count,
+        group_id=group_id,
+    )
+    return SpendingSeries(
+        granularity=granularity,
+        points=[
+            SeriesPoint(
+                bucket=point.bucket,
+                start=point.start,
+                amount=point.amount,
+                expense_count=point.expense_count,
+            )
+            for point in points
+        ],
+    )
+
+
+@router.get(
+    "/spending-series",
+    response_model=SpendingSeries,
+    summary="Spending over time, by day or by month",
+)
+def read_spending_series(
     db: DbSession,
     current_user: ActiveUser,
-    months: Annotated[int, Query(ge=1, le=24)] = 6,
+    granularity: Annotated[Granularity, Query()] = Granularity.DAILY,
+    count: Annotated[
+        int | None,
+        Query(ge=1, le=366, description="Buckets to return. Defaults to 30 days / 6 months."),
+    ] = None,
     currency: CurrencyParam = None,
     group_id: Annotated[uuid.UUID | None, Query()] = None,
-) -> list[MonthSpending]:
-    """Oldest first. Quiet months come back as zero so the time axis stays even."""
+) -> SpendingSeries:
+    """Oldest first. Empty buckets come back as zero so the time axis stays even."""
     if group_id is not None:
         group = group_service.get_or_404(db, group_id)
         group_service.require_membership(group, current_user.id)
 
-    rows = analytics_service.monthly_spending(
+    return _series(
         db,
-        current_user.id,
+        current_user,
         _currency(currency, current_user.currency),
-        months=months,
-        group_id=group_id,
+        granularity,
+        count,
+        group_id,
     )
-    return [
-        MonthSpending(month=row.month, amount=row.amount, expense_count=row.expense_count)
-        for row in rows
-    ]
 
 
 @router.get("/groups", response_model=list[GroupStatistics], summary="Per-group statistics")
@@ -138,7 +174,10 @@ def read_dashboard(
     start_date: StartDate = None,
     end_date: EndDate = None,
     currency: CurrencyParam = None,
-    months: Annotated[int, Query(ge=1, le=24)] = 6,
+    granularity: Annotated[Granularity, Query(description="Bucket size for the time series.")] = Granularity.DAILY,
+    count: Annotated[
+        int | None, Query(ge=1, le=366, description="Buckets in the series.")
+    ] = None,
 ) -> Dashboard:
     """One round trip for the whole dashboard.
 
@@ -193,12 +232,7 @@ def read_dashboard(
             )
             for row in analytics_service.spending_by_category(db, current_user.id, code, window)
         ],
-        by_month=[
-            MonthSpending(month=row.month, amount=row.amount, expense_count=row.expense_count)
-            for row in analytics_service.monthly_spending(
-                db, current_user.id, code, months=months
-            )
-        ],
+        series=_series(db, current_user, code, granularity, count),
         by_group=[
             GroupSpending(group=GroupRef.model_validate(group), amount=amount)
             for group, amount in analytics_service.spending_by_group(

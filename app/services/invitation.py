@@ -1,4 +1,4 @@
-"""Email invitations for people who are not on Splitwise yet.
+"""Email invitations for people who are not on Owsify yet.
 
 The point of an invitation is what happens later: when the invitee registers with
 the address they were invited at, every open invite for that address turns into an
@@ -39,7 +39,7 @@ def build_invitation_email(invitation: Invitation, inviter: User) -> Email:
     note = f"\n\nThey added a note:\n\n  “{invitation.message}”\n" if invitation.message else ""
 
     text = (
-        f"{inviter.full_name} wants to split expenses with you on Splitwise."
+        f"{inviter.full_name} wants to split expenses with you on Owsify."
         f"{note}\n"
         f"Create your account here:\n\n  {url}\n\n"
         f"You will be connected with {inviter.full_name} automatically once you sign up.\n"
@@ -49,7 +49,7 @@ def build_invitation_email(invitation: Invitation, inviter: User) -> Email:
 
     html = f"""\
 <html><body style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#0f172a">
-  <p><strong>{inviter.full_name}</strong> wants to split expenses with you on Splitwise.</p>
+  <p><strong>{inviter.full_name}</strong> wants to split expenses with you on Owsify.</p>
   {f'<blockquote style="border-left:3px solid #cbd5e1;margin:16px 0;padding:4px 0 4px 12px;color:#475569">{invitation.message}</blockquote>' if invitation.message else ''}
   <p>
     <a href="{url}" style="display:inline-block;background:#047857;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">
@@ -65,7 +65,7 @@ def build_invitation_email(invitation: Invitation, inviter: User) -> Email:
 
     return Email(
         to=invitation.email,
-        subject=f"{inviter.full_name} invited you to Splitwise",
+        subject=f"{inviter.full_name} invited you to Owsify",
         text_body=text,
         html_body=html,
     )
@@ -109,7 +109,7 @@ def create(db: Session, inviter: User, email: str, message: str | None = None) -
     existing_user = user_service.get_by_email(db, address)
     if existing_user is not None:
         raise ConflictError(
-            f"{existing_user.full_name} is already on Splitwise. Send them a friend request instead.",
+            f"{existing_user.full_name} is already on Owsify. Send them a friend request instead.",
             details=[
                 {
                     "field": "email",

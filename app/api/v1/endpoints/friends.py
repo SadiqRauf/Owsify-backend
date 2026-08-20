@@ -126,7 +126,7 @@ def cancel_request(friendship_id: uuid.UUID, db: DbSession, current_user: Active
 
 
 # --------------------------------------------------------------------------- #
-# Invitations — for people who are not on Splitwise yet
+# Invitations — for people who are not on Owsify yet
 # --------------------------------------------------------------------------- #
 @router.get(
     "/invitations", response_model=list[InvitationRead], summary="Invitations you have sent"

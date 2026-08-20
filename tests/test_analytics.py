@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
@@ -115,32 +116,122 @@ class TestCategorySpending:
         assert response.status_code == 400
 
 
-class TestMonthlySpending:
-    def test_returns_a_continuous_series_including_empty_months(
+class TestSpendingSeries:
+    def test_daily_returns_a_continuous_series_including_empty_days(
         self, client: TestClient, alice: Actor, make_group
     ) -> None:
         group = make_group(alice)
-        add_expense(client, alice, group["id"], alice, alice, amount="40.00")
+        add_expense(
+            client, alice, group["id"], alice, alice,
+            amount="40.00", expense_date=date.today().isoformat(),
+        )
 
-        rows = client.get(
-            "/api/v1/analytics/monthly", params={"months": 6}, headers=alice.headers
+        body = client.get("/api/v1/analytics/spending-series", headers=alice.headers).json()
+
+        assert body["granularity"] == "daily"
+        points = body["points"]
+        assert len(points) == 30
+        # Oldest first, and every day present even with no activity.
+        assert points == sorted(points, key=lambda row: row["bucket"])
+        # Exactly one day carries the spend; the rest are explicit zeros.
+        assert sum(1 for row in points if Decimal(row["amount"]) > 0) == 1
+        assert sum(1 for row in points if Decimal(row["amount"]) == 0) == 29
+
+    def test_daily_window_ends_today(self, client: TestClient, alice: Actor) -> None:
+        points = client.get(
+            "/api/v1/analytics/spending-series",
+            params={"granularity": "daily", "count": 7},
+            headers=alice.headers,
+        ).json()["points"]
+
+        assert len(points) == 7
+        assert points[-1]["bucket"] == date.today().isoformat()
+        assert points[0]["bucket"] == (date.today() - timedelta(days=6)).isoformat()
+
+    def test_monthly_buckets_by_month(self, client: TestClient, alice: Actor) -> None:
+        body = client.get(
+            "/api/v1/analytics/spending-series",
+            params={"granularity": "monthly"},
+            headers=alice.headers,
         ).json()
 
-        assert len(rows) == 6
-        # Oldest first, and every month present even with no activity.
-        assert rows == sorted(rows, key=lambda row: row["month"])
-        assert any(Decimal(row["amount"]) > 0 for row in rows)
-        assert all("amount" in row for row in rows)
+        assert body["granularity"] == "monthly"
+        points = body["points"]
+        assert len(points) == 6
+        # Year-month keys, oldest first, ending on the current month.
+        assert all(len(row["bucket"]) == 7 for row in points)
+        assert points[-1]["bucket"] == date.today().strftime("%Y-%m")
+        assert points == sorted(points, key=lambda row: row["bucket"])
 
-    def test_respects_the_month_count(self, client: TestClient, alice: Actor) -> None:
-        rows = client.get(
-            "/api/v1/analytics/monthly", params={"months": 12}, headers=alice.headers
-        ).json()
-        assert len(rows) == 12
+    def test_both_granularities_agree_on_the_total(
+        self, client: TestClient, alice: Actor, make_group
+    ) -> None:
+        """A daily and a monthly view of the same window must not disagree."""
+        group = make_group(alice)
+        for offset, amount in ((0, "10.00"), (3, "25.00"), (20, "5.00")):
+            add_expense(
+                client, alice, group["id"], alice, alice,
+                amount=amount,
+                expense_date=(date.today() - timedelta(days=offset)).isoformat(),
+                description=f"e{offset}",
+            )
 
-    def test_caps_the_range(self, client: TestClient, alice: Actor) -> None:
+        daily = client.get(
+            "/api/v1/analytics/spending-series",
+            params={"granularity": "daily", "count": 31},
+            headers=alice.headers,
+        ).json()["points"]
+        monthly = client.get(
+            "/api/v1/analytics/spending-series",
+            params={"granularity": "monthly", "count": 2},
+            headers=alice.headers,
+        ).json()["points"]
+
+        assert sum(Decimal(p["amount"]) for p in daily) == Decimal("40.00")
+        assert sum(Decimal(p["amount"]) for p in monthly) == Decimal("40.00")
+
+    def test_excludes_spending_older_than_the_window(
+        self, client: TestClient, alice: Actor, make_group
+    ) -> None:
+        group = make_group(alice)
+        add_expense(
+            client, alice, group["id"], alice, alice,
+            amount="99.00",
+            expense_date=(date.today() - timedelta(days=60)).isoformat(),
+            description="Ancient",
+        )
+
+        points = client.get(
+            "/api/v1/analytics/spending-series",
+            params={"granularity": "daily", "count": 30},
+            headers=alice.headers,
+        ).json()["points"]
+        assert all(Decimal(row["amount"]) == 0 for row in points)
+
+    def test_caps_the_count(self, client: TestClient, alice: Actor) -> None:
         response = client.get(
-            "/api/v1/analytics/monthly", params={"months": 99}, headers=alice.headers
+            "/api/v1/analytics/spending-series",
+            params={"granularity": "daily", "count": 400},
+            headers=alice.headers,
+        )
+        assert response.status_code == 422
+
+    def test_monthly_count_is_capped_to_its_own_maximum(
+        self, client: TestClient, alice: Actor
+    ) -> None:
+        """The query cap allows 366; monthly clamps itself to 60 buckets."""
+        points = client.get(
+            "/api/v1/analytics/spending-series",
+            params={"granularity": "monthly", "count": 300},
+            headers=alice.headers,
+        ).json()["points"]
+        assert len(points) == 60
+
+    def test_rejects_an_unknown_granularity(self, client: TestClient, alice: Actor) -> None:
+        response = client.get(
+            "/api/v1/analytics/spending-series",
+            params={"granularity": "hourly"},
+            headers=alice.headers,
         )
         assert response.status_code == 422
 
@@ -203,7 +294,8 @@ class TestDashboard:
         assert body["window"]["currency"] == "USD"
 
         assert len(body["by_category"]) == 1
-        assert len(body["by_month"]) == 6
+        assert body["series"]["granularity"] == "daily"
+        assert len(body["series"]["points"]) == 30
         assert len(body["by_group"]) == 1
         assert len(body["groups"]) == 1
         assert len(body["recent_expenses"]) == 1
@@ -249,7 +341,44 @@ class TestDashboard:
         assert body["by_category"] == []
         assert body["recent_expenses"] == []
         # The month series is still a full window so the chart has an axis.
-        assert len(body["by_month"]) == 6
+        assert body["series"]["granularity"] == "daily"
+        assert len(body["series"]["points"]) == 30
 
     def test_requires_authentication(self, client: TestClient) -> None:
         assert client.get("/api/v1/analytics/dashboard").status_code == 401
+
+
+class TestDashboardGranularity:
+    def test_dashboard_honours_the_granularity_parameter(
+        self, client: TestClient, alice: Actor
+    ) -> None:
+        daily = client.get("/api/v1/analytics/dashboard", headers=alice.headers).json()
+        assert daily["series"]["granularity"] == "daily"
+        assert len(daily["series"]["points"]) == 30
+
+        monthly = client.get(
+            "/api/v1/analytics/dashboard",
+            params={"granularity": "monthly"},
+            headers=alice.headers,
+        ).json()
+        assert monthly["series"]["granularity"] == "monthly"
+        assert len(monthly["series"]["points"]) == 6
+
+    def test_switching_granularity_does_not_change_the_headline_total(
+        self, client: TestClient, alice: Actor, make_group
+    ) -> None:
+        """The series bucketing must not affect total_spent, which follows the dates."""
+        group = make_group(alice)
+        add_expense(
+            client, alice, group["id"], alice, alice,
+            amount="60.00", expense_date=date.today().isoformat(),
+        )
+
+        daily = client.get("/api/v1/analytics/dashboard", headers=alice.headers).json()
+        monthly = client.get(
+            "/api/v1/analytics/dashboard",
+            params={"granularity": "monthly"},
+            headers=alice.headers,
+        ).json()
+
+        assert Decimal(daily["total_spent"]) == Decimal(monthly["total_spent"])

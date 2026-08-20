@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     )
 
     # --- Application ---
-    PROJECT_NAME: str = "Splitwise Clone API"
+    PROJECT_NAME: str = "Owsify API"
     VERSION: str = "0.1.0"
     DESCRIPTION: str = "Expense sharing and settlement API."
     ENVIRONMENT: Literal["development", "staging", "production"] = "development"
@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     # --- Email ---
     # "console" logs the message, "file" writes .eml files, "smtp" really sends.
     EMAIL_BACKEND: Literal["console", "file", "smtp"] = "console"
-    EMAIL_FROM: str = "Splitwise <no-reply@splitwise.local>"
+    EMAIL_FROM: str = "Owsify <no-reply@owsify.local>"
     EMAIL_FILE_PATH: str = "./sent-emails"
     SMTP_HOST: str = "localhost"
     SMTP_PORT: int = 587
