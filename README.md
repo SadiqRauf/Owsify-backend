@@ -182,6 +182,83 @@ total. Empty buckets are returned as zero rather than omitted, so a chart gets a
 even time axis instead of silently compressing gaps. `count` defaults to 30 days or
 6 months, and each granularity clamps to its own maximum (366 days, 60 months).
 
+### Khata
+
+A khata is a running two-party ledger — **one person's book about one other
+person**. That is a different shape from a group, and the difference drives three
+decisions:
+
+**The other party need not have an account.** The main use of a khata is a
+shopkeeper keeping one for a customer who will never install anything, so a khata
+carries its own `person_name` and only *optionally* links to a `User`. Requiring
+the counterparty to sign up first would remove the feature's main case.
+
+**It belongs to its owner alone.** Two people who deal with each other each keep
+their own book; neither can read the other's. A khata that is not yours returns
+404, not 403 — confirming it exists would leak who someone deals with.
+
+**Archiving is the default removal.** `DELETE` archives and keeps the history;
+`DELETE ?permanent=true` destroys the ledger and its entries. For a financial
+record the forgiving action belongs on the unqualified verb.
+
+Balances are summed from `khata_entries` on read, never stored on the account row,
+for the same reason group balances are. Entry direction is `GIVEN` / `RECEIVED`
+rather than debit / credit: those two inverting depending on whose books you think
+you are in is exactly the confusion a ledger cannot afford.
+
+**Entries are the source of truth.** No balance is stored anywhere: every figure
+the API reports is summed from `khata_entries` at read time, so an edited or
+deleted entry can never leave a total behind that disagrees with the book.
+
+There are three entry types. `GIVEN` and `RECEIVED` carry direction in the type, so
+their amounts stay positive — a negative `GIVEN` and a positive `RECEIVED` would be
+two ways to write one fact. `ADJUSTMENT` is a correction, has no inherent
+direction, and is the only type whose amount may be negative. Two CHECK constraints
+enforce exactly that (`amount <> 0`, and `entry_type = 'adjustment' OR amount > 0`),
+with the same rules restated in the service so the user gets a field error rather
+than a 500 from a constraint violation.
+
+`running_balance` is computed with a **window function over the khata's whole
+history**, and the page is taken from that result. Summing only the rows on the page
+would restart the total at every page boundary, and a date filter would restart it
+mid-history. The number has to mean "the balance after this entry", not "the balance
+after this entry among the rows you can see" — for the same reason, the page's
+`balance` and `totals` describe the khata and ignore the filters, so a filtered view
+can never make an unsettled khata look settled.
+
+Entries are created and listed under their khata but addressed directly once they
+exist (`PATCH`/`DELETE /khata/entries/{id}`). That router is registered **before**
+`/khata/{khata_id}`, which would otherwise read `entries` as a malformed UUID.
+
+**Attachments are not built.** The brief lists a receipt photo on an entry; nothing
+in the app stores files — no object storage, no upload endpoint, no way to serve one
+back — so the form says so rather than offering an input that silently drops what it
+takes.
+
+### People
+
+`GET /people/{user_id}/summary` is the one place the app adds a person up across
+every subsystem: group expenses, settlements, khata, and loans. It asks the existing
+services rather than re-deriving anything — the group figure comes from the same
+balance engine the group pages use, so the two can never disagree about the same
+relationship.
+
+Every component is signed the same way — **positive means they owe you** — so the
+total is a plain sum, and everything is scoped to one currency because adding PKR to
+USD is arithmetic on incompatible units.
+
+**`loan_balance` is always `0.00`: there is no loans feature in the app.** It is
+reported rather than omitted, and the person page says so on screen, because a
+breakdown that quietly drops a component reads as "you have no loans" rather than
+"loans do not exist here".
+
+`GET /people/{user_id}/activity` merges expenses, settlements and khata entries into
+one feed. `GET /people` lists everyone you share money with — and, marked
+`has_account: false`, the khata contacts who have no account at all. They cannot
+have a person page, since `/people/{id}` is keyed by user id, so their row points at
+their khata instead. Hiding them would be worse: from the owner's side they are
+exactly as real as anyone else.
+
 ### Production
 
 ```bash

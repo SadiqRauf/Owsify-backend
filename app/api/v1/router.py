@@ -12,6 +12,9 @@ from app.api.v1.endpoints import (
     friends,
     groups,
     health,
+    khata,
+    khata_entries,
+    people,
     settlements,
     users,
 )
@@ -29,5 +32,11 @@ api_router.include_router(groups.router)
 api_router.include_router(expenses.router)
 api_router.include_router(balances.router)
 api_router.include_router(settlements.router)
+# The entry router first: its `/khata/entries/{id}` would otherwise be matched
+# by `/khata/{khata_id}`, which reads "entries" as a malformed uuid.
+api_router.include_router(khata_entries.entry_router)
+api_router.include_router(khata_entries.router)
+api_router.include_router(khata.router)
+api_router.include_router(people.router)
 api_router.include_router(activity.router)
 api_router.include_router(analytics.router)
