@@ -3,8 +3,13 @@
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import PostgresDsn, computed_field, field_validator
+from pydantic import PostgresDsn, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+# Recognisable so the production guard below can reject it by identity rather
+# than trying to guess whether a key "looks" real.
+DEV_SECRET_KEY = "dev-only-insecure-secret-change-me"
 
 
 class Settings(BaseSettings):
@@ -40,7 +45,7 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE_SECONDS: int = 1800
 
     # --- Security / JWT ---
-    SECRET_KEY: str = "dev-only-insecure-secret-change-me"
+    SECRET_KEY: str = DEV_SECRET_KEY
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
@@ -101,6 +106,39 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"
+
+    @model_validator(mode="after")
+    def _refuse_unsafe_production_config(self) -> "Settings":
+        """Fail fast rather than serve production traffic with dev defaults.
+
+        A placeholder signing key in production means anyone who has read the
+        source can mint a valid token for any account. That has to be a startup
+        crash, not a warning someone scrolls past.
+        """
+        if self.ENVIRONMENT != "production":
+            return self
+
+        problems: list[str] = []
+
+        if self.SECRET_KEY == DEV_SECRET_KEY or len(self.SECRET_KEY) < 32:
+            problems.append(
+                "SECRET_KEY must be set to a unique value of at least 32 characters "
+                '(generate one with: python -c "import secrets; print(secrets.token_urlsafe(64))")'
+            )
+
+        if self.DEBUG:
+            problems.append("DEBUG must be false in production; it leaks internals in error responses")
+
+        if any(origin == "*" for origin in self.CORS_ORIGINS):
+            problems.append("CORS_ORIGINS must name real origins, never '*'")
+
+        if problems:
+            raise ValueError(
+                "Refusing to start in production with an unsafe configuration:\n  - "
+                + "\n  - ".join(problems)
+            )
+
+        return self
 
 
 @lru_cache

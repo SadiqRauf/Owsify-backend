@@ -164,6 +164,52 @@ tables rather than an append-only log. A derived feed can never describe somethi
 that no longer exists; the cost is that only current state is visible, so a deleted
 expense leaves the feed and edits show new values rather than a change history.
 
+### Analytics
+
+Two decisions shape `app/services/analytics.py`:
+
+**"Spending" means your share, not what you paid.** The figures join through
+`expense_splits`, not `expenses.paid_by_id`. Someone who fronts the money for a
+group has not spent it all.
+
+**One currency per query.** Every analytics call is scoped to a single currency
+(the caller's default unless they say otherwise). Balances still span currencies, so
+a single-currency dashboard never hides money.
+
+Monthly series return quiet months as zero rather than omitting them, so a chart
+gets an even time axis instead of silently compressing gaps.
+
+### Production
+
+```bash
+docker compose up --build     # from the repository root
+```
+
+- Multi-stage build: wheels compiled in a builder image, so the runtime has no
+  compiler and no `libpq-dev`.
+- Runs as a non-root user, with a healthcheck on `/api/v1/health/live`.
+- `docker-entrypoint.sh` waits for Postgres and runs `alembic upgrade head` before
+  starting the server, so replicas cannot race a half-applied schema.
+- `Settings` refuses to start when `ENVIRONMENT=production` and any of: the
+  development `SECRET_KEY`, a secret under 32 characters, `DEBUG=true`, or
+  `CORS_ORIGINS=*`. A placeholder signing key in production means anyone who has
+  read the source can mint a token for any account, so that is a startup crash
+  rather than a warning.
+- Docs (`/docs`, `/redoc`, the OpenAPI JSON) are disabled in production.
+
+### Indexes
+
+Composite indexes cover the access patterns, not just individual columns:
+
+| Index | Serves |
+| --- | --- |
+| `ix_expenses_group_date` | group expense lists and every group balance query |
+| `ix_expenses_currency_date` | analytics slicing by currency and date |
+| `ix_expense_splits_user_amount` | "my share of everything", the analytics hot path |
+| `ix_group_members_user_group` | the visibility check on every scoped query |
+| `ix_settlements_group_date` | a group's settlement history |
+| `ix_settlements_pair` | settlements between two people |
+
 ### Permissions
 
 - A **group** is invisible to non-members: they get 404, not 403, so ids cannot be

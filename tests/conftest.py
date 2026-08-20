@@ -4,16 +4,23 @@ Each test runs inside a transaction that is rolled back afterwards, so the suite
 never leaves rows behind and tests cannot see each other's data.
 """
 
-from collections.abc import Callable, Generator
+import os
+
+# Must precede any app import: Settings is cached, and bcrypt at the production
+# cost factor dominates the suite's runtime (every fixture registers a user).
+# 4 rounds is the library minimum and keeps the hashing path itself under test.
+os.environ.setdefault("BCRYPT_ROUNDS", "4")
+
+from collections.abc import Callable, Generator  # noqa: E402
 from dataclasses import dataclass
 
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import Session, sessionmaker
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import create_engine, text  # noqa: E402
+from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
 
-from app.core.config import settings
-from app.db.base import Base
+from app.core.config import settings  # noqa: E402
+from app.db.base import Base  # noqa: E402
 from app.db.session import get_db
 from app.main import app
 from app.models import (  # noqa: F401 — registers the tables

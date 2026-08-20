@@ -3,7 +3,7 @@
 import uuid
 from enum import StrEnum
 
-from sqlalchemy import Enum as SAEnum, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Enum as SAEnum, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -60,7 +60,12 @@ class Group(Base, TimestampMixin):
 
 class GroupMember(Base, TimestampMixin):
     __tablename__ = "group_members"
-    __table_args__ = (UniqueConstraint("group_id", "user_id", name="uq_group_members_group_user"),)
+    __table_args__ = (
+        UniqueConstraint("group_id", "user_id", name="uq_group_members_group_user"),
+        # "which groups is this user in" is on the hot path of every visibility
+        # check, so index the user side first.
+        Index("ix_group_members_user_group", "user_id", "group_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     group_id: Mapped[uuid.UUID] = mapped_column(

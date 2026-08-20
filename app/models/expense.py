@@ -8,6 +8,7 @@ from enum import StrEnum
 from sqlalchemy import (
     CheckConstraint,
     Date,
+    Index,
     Enum as SAEnum,
     ForeignKey,
     Numeric,
@@ -59,7 +60,14 @@ def _enum_column(enum_cls: type[StrEnum], **kwargs: object):
 
 class Expense(Base, TimestampMixin):
     __tablename__ = "expenses"
-    __table_args__ = (CheckConstraint("amount > 0", name="amount_is_positive"),)
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="amount_is_positive"),
+        # The group expense list and every group balance query filter on group_id
+        # and order by date, so one composite index serves both.
+        Index("ix_expenses_group_date", "group_id", "expense_date"),
+        # Analytics slices by currency and date across all of a user's expenses.
+        Index("ix_expenses_currency_date", "currency", "expense_date"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
@@ -114,6 +122,9 @@ class ExpenseSplit(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("expense_id", "user_id", name="uq_expense_splits_expense_user"),
         CheckConstraint("amount >= 0", name="share_is_not_negative"),
+        # "my share of everything" drives the whole analytics section; this lets it
+        # be an index-only scan rather than a table scan plus filter.
+        Index("ix_expense_splits_user_amount", "user_id", "amount"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

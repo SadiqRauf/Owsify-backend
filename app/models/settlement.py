@@ -84,9 +84,7 @@ class Settlement(Base, TimestampMixin):
         return f"<Settlement {self.amount} {self.currency} {self.from_user_id}->{self.to_user_id}>"
 
 
-# Index for the common "settlements between these two people" lookup.
-sa.Index(
-    "ix_settlements_pair",
-    Settlement.from_user_id,
-    Settlement.to_user_id,
-)
+# The two lookups that matter: "settlements between these people" and
+# "this group's settlements, newest first".
+sa.Index("ix_settlements_pair", Settlement.from_user_id, Settlement.to_user_id)
+sa.Index("ix_settlements_group_date", Settlement.group_id, Settlement.settled_on)
