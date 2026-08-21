@@ -30,6 +30,8 @@ from app.models import (  # noqa: F401 — registers the tables
     Group,
     GroupMember,
     Invitation,
+    KhataAccount,
+    KhataEntry,
     RefreshToken,
     Settlement,
     User,
@@ -194,8 +196,10 @@ def _reset_tables(db: Session) -> Generator[None, None, None]:
     yield
     db.execute(
         text(
-            "TRUNCATE settlements, expense_splits, expenses, group_members, groups, "
-            "friendships, invitations, refresh_tokens, users RESTART IDENTITY CASCADE"
+            "TRUNCATE reminders, notes, loan_payments, loans, khata_entries, khata_accounts, "
+            "settlements, expense_splits, "
+            "expenses, group_members, groups, friendships, invitations, "
+            "refresh_tokens, users RESTART IDENTITY CASCADE"
         )
     )
     db.commit()

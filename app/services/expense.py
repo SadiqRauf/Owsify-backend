@@ -202,6 +202,18 @@ def update(db: Session, expense: Expense, actor: User, payload: ExpenseUpdate) -
         )
         _validate_participants(db, actor, group, new_paid_by, participant_ids)
 
+    # Checked before anything is assigned. Raising after mutating would leave the
+    # session holding a dirty expense that a later flush still tries to write, and
+    # the rejection would have quietly changed the object it rejected.
+    if (
+        split_participants is None
+        and split_type is SplitType.EXACT
+        and payload.amount is not None
+    ):
+        raise BadRequestError(
+            "Changing the amount of an exact split needs new split amounts too."
+        )
+
     for field in ("description", "amount", "currency", "expense_date", "category", "notes", "paid_by_id"):
         if field in data:
             setattr(expense, field, data[field])
@@ -220,10 +232,6 @@ def update(db: Session, expense: Expense, actor: User, payload: ExpenseUpdate) -
             )
             for split in expense.splits
         ]
-        if split_type is SplitType.EXACT and payload.amount is not None:
-            raise BadRequestError(
-                "Changing the amount of an exact split needs new split amounts too."
-            )
         _replace_splits(db, expense, _build_splits(new_amount, split_type, carried))
 
     db.commit()
