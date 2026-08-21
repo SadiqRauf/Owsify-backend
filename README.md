@@ -247,10 +247,9 @@ Every component is signed the same way — **positive means they owe you** — s
 total is a plain sum, and everything is scoped to one currency because adding PKR to
 USD is arithmetic on incompatible units.
 
-**`loan_balance` is always `0.00`: there is no loans feature in the app.** It is
-reported rather than omitted, and the person page says so on screen, because a
-breakdown that quietly drops a component reads as "you have no loans" rather than
-"loans do not exist here".
+`loan_balance` is the outstanding total across the loans you have given them,
+cancelled loans excluded — a written-off loan is not money you expect back. It was a
+stated zero until the loan feature existed; see **Loans** below.
 
 `GET /people/{user_id}/activity` merges expenses, settlements and khata entries into
 one feed. `GET /people` lists everyone you share money with — and, marked
@@ -258,6 +257,146 @@ one feed. `GET /people` lists everyone you share money with — and, marked
 have a person page, since `/people/{id}` is keyed by user id, so their row points at
 their khata instead. Hiding them would be worse: from the owner's side they are
 exactly as real as anyone else.
+
+### Loans
+
+A loan is the same shape as a khata — one person's record about one other person —
+but it answers a different question. A khata is an open-ended running tally with no
+end state; a loan is a fixed principal that is either outstanding or settled, with a
+date by which it should have been settled.
+
+**A loan has a direction.** `GIVEN` means you lent it and they owe you; `TAKEN`
+means you borrowed it and you owe them. The row is always owned by whoever keeps the
+record, so the columns are `owner_id` and `counterparty_*` rather than lender and
+borrower — for a `TAKEN` loan the owner *is* the borrower, and a column named
+`lender_id` holding a borrower would be a schema that lies about its own rows. The
+migration renames rather than adds-and-copies, because every pre-existing row is a
+loan that was given and needs no transformation.
+
+`signed_balance` is the one number that matters, and it is signed the same way as
+every other balance in the app: **positive means they owe you**. It is
+`(amount − paid)` for a loan you gave and the negation of that for one you took, so
+loans fold into khata and group balances with no special case at the call site.
+
+**Status is derived, not stored.** The model has no `status` column. Four of the five
+statuses are facts about the payments and the calendar — `PAID` means the payments
+add up to the principal, `OVERDUE` means the due date passed with money outstanding —
+and a stored copy of a derived fact is a copy that can go stale. A row saying PAID
+while its payments sum to less is a loan nobody can trust. Only `CANCELLED` is a
+decision rather than a consequence, so only that one is a column (`cancelled_at`).
+
+`OVERDUE` takes precedence over `PARTIALLY_PAID`: a part-paid loan that is late is
+late, and showing it as merely part-paid buries the fact that needs acting on. A
+settled loan is never overdue — there is nothing left to be late for.
+
+**"Mark as paid" records a payment**, via `POST /loans/{id}/settle`, rather than
+setting a flag. A loan marked PAID whose payments add up to less is exactly the
+inconsistency this design avoids, so the closing payment is written for whatever is
+left, and the history then shows what closed the loan and when.
+
+**Overpayment flips the balance.** Repay 1,500 against a 1,000 loan and the extra
+500 is owed the other way: `remaining` is 0, `overpaid` is 500, `signed_balance` is
+−500, and the status becomes `OVERPAID`.
+
+`OVERPAID` is a sixth status beyond the five in the brief, and a separate one from
+`PAID` on purpose — the two mean opposite things about who owes whom. `PAID` means
+nobody owes anybody; `OVERPAID` means the debt now runs the other way, and calling
+it paid would hide money that is genuinely owed. An earlier version clamped
+`remaining` at zero and quietly lost that 500.
+
+The principal cannot be lowered below what has already been repaid — that would
+describe a loan its own history contradicts. `DELETE` cancels and keeps the payments;
+`?permanent=true` destroys both, the same convention as khata.
+
+Status is filtered in Python rather than SQL. Three of the five values depend on the
+payment total and today's date, so expressing them as SQL predicates would restate
+the whole rule in a second language where the two could drift apart. A lender's loan
+list is small enough that loading it and filtering is the cheaper mistake to avoid.
+
+Loans feed the person page's `loan_balance` through `signed_balance`, so a loan you
+took and an overpaid loan you gave both correctly reduce what a person owes you.
+
+`totals_for_owner` reports the two directions **separately** rather than netted:
+being owed 50,000 while owing 30,000 is a different situation from being owed
+20,000, and one net figure cannot tell them apart. `net` is offered alongside for
+anyone who wants the single number.
+
+### Notes and reminders
+
+Both attach to exactly one subject: a khata, a loan, or a person. The obvious model is
+a generic `subject_type` + `subject_id` pair, and this deliberately is not that. A
+generic pair cannot carry a foreign key, so nothing stops a note pointing at a khata
+deleted last week, and every read has to branch on a string. Two nullable foreign keys
+plus a person column, with a CHECK that exactly one is set, gets referential integrity
+from the database and makes "notes on this loan" an ordinary indexed query. The cost is
+one column per attachable kind; with three kinds that is cheaper than the integrity it
+buys.
+
+**A reminder has two dates.** `due_date` is when the money is expected; `remind_on` is
+when the app should surface it. Collapsing them into one forces a choice between
+nagging early and being told the day something is already late. A reminder whose
+`remind_on` has not arrived is real but not yet anyone's problem, and reports
+`is_surfaced: false` rather than being hidden outright.
+
+`completed` maps to a timestamp rather than a boolean, so "when was this done" stays
+answerable. Reminder status is derived from the calendar, like loan status.
+
+A due date moved earlier can strand a `remind_on` that was valid when it was set, so
+the pair is re-validated on every edit — and validated **before** anything is
+assigned. Raising after mutating leaves the session holding a dirty object that a
+later flush still tries to write. The same fault was found and fixed in the expense
+service, where a rejected exact-split edit had been quietly changing the expense it
+rejected.
+
+### Timeline
+
+`GET /people/{id}/timeline` merges six sources — group expenses, settlements, khata
+entries, loans given, loan payments, and notes — into one history.
+
+**Ordering is by calendar date first, timestamp second.** A khata entry dated last
+Tuesday belongs on last Tuesday even though it was typed in today; the timestamp only
+breaks ties within a day. Sorting purely by `created_at` produces a timeline that
+reads as a data-entry log rather than a history.
+
+Notes on a person's khata or loan appear on their timeline too: from a reader's point
+of view all three are notes about the same relationship.
+
+### Reports
+
+`/reports/summary`, `/reports/khata`, `/reports/loans` and `/reports/activity` share
+one shape: a date range, an optional person, and totals that add up. They read the
+same rows every other page reads — nothing is precomputed or cached — so a report can
+never describe a state the app is no longer in.
+
+Loans given and taken are reported separately throughout — `loans_given` beside
+`loans_taken`, `loan_payments` beside `loan_repayments_made`, `loans_receivable`
+beside `loans_payable` — for the same reason the loan totals are. Borrowing counts
+as money in and repaying it as money out, which is what `net_flow` reflects. The
+activity chart follows loans you *gave* only: mixing in loans you took would invert
+the meaning of both its series.
+
+**Flows are windowed; positions are not.** `money_given`, `loan_payments` and the rest
+are bounded by the date range. `khata_receivable`, `loans_receivable` and
+`loans_payable` deliberately are not: what you are owed is a position, not a flow, and it does not reset because a
+month ended. A report that windowed them would let a quiet month read as a settled
+book, so both the schema and the UI say which is which.
+
+The window defaults to the current month and is echoed back on every response, so a
+report that is saved, printed or shared still says what it covers. A range that is
+exactly one calendar month is labelled with that month's name.
+
+`available_currencies` lists the currencies you have money actually recorded in, most
+active first, and is **not** padded with your profile currency. A caller uses it to
+decide whether the currency it was about to show has anything to show; padding it with
+a guaranteed member would make that question unanswerable. Every currency stays
+selectable regardless — this is only about picking a sensible default, so someone whose
+khatas are all in rupees does not open Reports on a page of zeroes.
+
+Activity series fill empty periods with zero rather than omitting them, so a chart gets
+an even time axis instead of silently compressing the quiet stretches.
+
+An adjustment is reported on whichever side its sign puts it: a correction to money
+given or money received, not a third kind of movement.
 
 ### Production
 

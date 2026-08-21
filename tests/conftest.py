@@ -196,7 +196,8 @@ def _reset_tables(db: Session) -> Generator[None, None, None]:
     yield
     db.execute(
         text(
-            "TRUNCATE khata_entries, khata_accounts, settlements, expense_splits, "
+            "TRUNCATE reminders, notes, loan_payments, loans, khata_entries, khata_accounts, "
+            "settlements, expense_splits, "
             "expenses, group_members, groups, friendships, invitations, "
             "refresh_tokens, users RESTART IDENTITY CASCADE"
         )

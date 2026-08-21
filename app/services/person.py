@@ -7,9 +7,9 @@ existing services rather than re-deriving anything: if the person page and the
 group page ever disagreed about a group balance, the person page would be the one
 people stopped trusting.
 
-**Loans are not a feature yet.** `loan_balance` is present and always zero, because
-the field is part of the agreed shape and silently dropping it would make the total
-look complete when a component is missing. It becomes real when loans do.
+All three components are derived, never stored: group balances from the balance
+engine, khata balances from their entries, loan balances from their payments. The
+person page therefore cannot drift out of step with the pages it aggregates.
 """
 
 from __future__ import annotations
@@ -26,9 +26,11 @@ from app.core.exceptions import NotFoundError
 from app.models.expense import Expense, ExpenseSplit
 from app.models.group import Group, GroupMember
 from app.models.khata import KhataAccount, KhataEntry
+from app.models.loan import Loan, LoanPayment
 from app.models.settlement import Settlement
 from app.models.user import User
 from app.services import balance as balance_service
+from app.services import loan as loan_service
 from app.services.khata_entry import signed_amount_sql
 
 ZERO = Decimal("0.00")
@@ -53,8 +55,18 @@ class PersonSummary:
 
     shared_group_count: int
     khata_count: int
+    loan_count: int
     expense_count: int
     khata_ids: list[uuid.UUID] = field(default_factory=list)
+
+    available_currencies: list[str] = field(default_factory=list)
+    """Currencies this pair has money recorded in, most active first.
+
+    Without this a page defaults to the viewer's profile currency and can announce
+    "Settled up" for someone who owes a fortune in another one — a false statement,
+    not merely an empty view. Not padded with the viewer's currency, so an empty
+    list genuinely means nothing is recorded between them.
+    """
 
 
 def get_person_or_404(db: Session, user_id: uuid.UUID) -> User:
@@ -91,6 +103,53 @@ def _khata_balance(
         )
     )
     return Decimal(balance or 0).quantize(Decimal("0.01")), len(khatas), ids
+
+
+def pair_currencies(db: Session, viewer: User, person_id: uuid.UUID) -> list[str]:
+    """Currencies in which these two have anything recorded, most active first."""
+    counts: dict[str, int] = {}
+
+    for currency, count in db.execute(
+        select(KhataAccount.currency, func.count())
+        .join(KhataEntry, KhataEntry.khata_id == KhataAccount.id)
+        .where(KhataAccount.owner_id == viewer.id, KhataAccount.person_user_id == person_id)
+        .group_by(KhataAccount.currency)
+    ).all():
+        counts[currency] = counts.get(currency, 0) + count
+
+    for currency, count in db.execute(
+        select(Loan.currency, func.count())
+        .where(Loan.owner_id == viewer.id, Loan.counterparty_user_id == person_id)
+        .group_by(Loan.currency)
+    ).all():
+        counts[currency] = counts.get(currency, 0) + count
+
+    for currency, count in db.execute(
+        select(Expense.currency, func.count(func.distinct(Expense.id)))
+        .join(ExpenseSplit, ExpenseSplit.expense_id == Expense.id)
+        .where(
+            ExpenseSplit.user_id == person_id,
+            Expense.id.in_(
+                select(ExpenseSplit.expense_id).where(ExpenseSplit.user_id == viewer.id)
+            ),
+        )
+        .group_by(Expense.currency)
+    ).all():
+        counts[currency] = counts.get(currency, 0) + count
+
+    for currency, count in db.execute(
+        select(Settlement.currency, func.count())
+        .where(
+            or_(
+                (Settlement.from_user_id == viewer.id) & (Settlement.to_user_id == person_id),
+                (Settlement.from_user_id == person_id) & (Settlement.to_user_id == viewer.id),
+            )
+        )
+        .group_by(Settlement.currency)
+    ).all():
+        counts[currency] = counts.get(currency, 0) + count
+
+    return [code for code, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
 
 
 def summarise(
@@ -170,9 +229,24 @@ def summarise(
             or 0
         )
 
-    # Loans have no feature behind them yet, so this is a stated zero rather than
-    # an omitted field — see the module docstring.
-    loan_balance = ZERO
+    # Net across every loan between you, in either direction and including any
+    # overpayment that flipped one. Cancelled loans excluded — a written-off loan is
+    # not money anyone expects.
+    loan_balance = loan_service.balance_with(db, viewer.id, person_id, code)
+
+    loan_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(Loan)
+            .where(
+                Loan.owner_id == viewer.id,
+                Loan.counterparty_user_id == person_id,
+                Loan.currency == code,
+                Loan.cancelled_at.is_(None),
+            )
+        )
+        or 0
+    )
 
     return PersonSummary(
         person=person,
@@ -184,8 +258,10 @@ def summarise(
         settled_total=settled_total,
         shared_group_count=shared_groups,
         khata_count=khata_count,
+        loan_count=loan_count,
         expense_count=expense_count,
         khata_ids=khata_ids,
+        available_currencies=pair_currencies(db, viewer, person_id),
     )
 
 

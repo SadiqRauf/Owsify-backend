@@ -14,7 +14,10 @@ from app.api.v1.endpoints import (
     health,
     khata,
     khata_entries,
+    loans,
+    notes,
     people,
+    reports,
     settlements,
     users,
 )
@@ -37,6 +40,13 @@ api_router.include_router(settlements.router)
 api_router.include_router(khata_entries.entry_router)
 api_router.include_router(khata_entries.router)
 api_router.include_router(khata.router)
+# The payment router first, for the same reason: `/loans/payments/{id}` would
+# otherwise be matched by `/loans/{loan_id}`.
+api_router.include_router(loans.payment_router)
+api_router.include_router(loans.router)
+api_router.include_router(notes.notes_router)
+api_router.include_router(notes.reminders_router)
 api_router.include_router(people.router)
 api_router.include_router(activity.router)
 api_router.include_router(analytics.router)
+api_router.include_router(reports.router)

@@ -22,12 +22,10 @@ class PersonBalanceBreakdown(BaseModel):
     )
     khata_balance: Decimal = Field(description="Net across the khatas you keep for them.")
     loan_balance: Decimal = Field(
-        default=Decimal("0.00"),
         description=(
-            "Always 0.00 — there is no loans feature in the app yet. The field is "
-            "reported rather than omitted so the total is visibly complete, and it "
-            "starts carrying value the day loans exist."
-        ),
+            "Outstanding across the loans you have given them, cancelled loans "
+            "excluded. Derived from the loan payments, never stored."
+        )
     )
     total_balance: Decimal = Field(description="group + khata + loan.")
     settled_total: Decimal = Field(
@@ -44,8 +42,17 @@ class PersonSummaryRead(BaseModel):
     balances: PersonBalanceBreakdown
     shared_group_count: int
     khata_count: int
+    loan_count: int
     expense_count: int
     khata_ids: list[uuid.UUID]
+    available_currencies: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Currencies you two have money recorded in, most active first. Lets a "
+            "client avoid announcing 'Settled up' for someone who owes a fortune in "
+            "a currency it did not ask about."
+        ),
+    )
     shared_groups: list["PersonGroupRef"]
     recent_activity: list["PersonActivityRead"]
 

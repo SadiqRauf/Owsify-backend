@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query
 
 from app.api.deps import ActiveUser, DbSession
 from app.core.currencies import normalise_currency
+from app.schemas.note import TimelineEntry, TimelinePage
 from app.schemas.person import (
     PersonActivityPage,
     PersonActivityRead,
@@ -21,6 +22,7 @@ from app.schemas.user import UserRead
 from app.services import balance as balance_service
 from app.services import khata_entry as entry_service
 from app.services import person as person_service
+from app.services import timeline as timeline_service
 
 router = APIRouter(prefix="/people", tags=["people"])
 
@@ -92,12 +94,12 @@ def read_summary(
     """Group expenses, khata and loans, added up.
 
     Every component is signed the same way — positive means they owe you — so the
-    total is a plain sum. `loan_balance` is always 0.00: the app has no loans
-    feature yet, and the field is reported rather than dropped so the breakdown is
-    visibly complete rather than quietly partial.
+    total is a plain sum, and all of it is scoped to one currency.
 
-    The group figure comes from the balance engine that the group pages use, so this
-    page can never disagree with them.
+    Nothing here is stored: the group figure comes from the same balance engine the
+    group pages use, the khata figure from its entries, the loan figure from its
+    payments. This page therefore cannot drift out of step with the pages it
+    aggregates.
     """
     code = normalise_currency(currency) if currency else current_user.currency
     summary = person_service.summarise(db, current_user, user_id, currency=code)
@@ -116,8 +118,10 @@ def read_summary(
         ),
         shared_group_count=summary.shared_group_count,
         khata_count=summary.khata_count,
+        loan_count=summary.loan_count,
         expense_count=summary.expense_count,
         khata_ids=summary.khata_ids,
+        available_currencies=summary.available_currencies,
         shared_groups=[PersonGroupRef.model_validate(group) for group in groups],
         recent_activity=[PersonActivityRead(**asdict(item)) for item in recent],
     )
@@ -144,4 +148,36 @@ def read_activity(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get(
+    "/{user_id}/timeline",
+    response_model=TimelinePage,
+    summary="Everything that has happened, in order",
+)
+def read_timeline(
+    user_id: uuid.UUID,
+    db: DbSession,
+    current_user: ActiveUser,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> TimelinePage:
+    """Expenses, settlements, khata entries, loans, repayments and notes, merged.
+
+    Ordered by the date each thing happened rather than when it was typed in: a
+    khata entry dated last Tuesday belongs on last Tuesday, and sorting by row
+    creation would turn a history into a data-entry log.
+    """
+    person = person_service.get_person_or_404(db, user_id)
+    items, total = timeline_service.for_person(
+        db, current_user, user_id, limit=limit, offset=offset
+    )
+
+    return TimelinePage(
+        items=[TimelineEntry(**asdict(item)) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+        person=UserRead.model_validate(person),
     )
