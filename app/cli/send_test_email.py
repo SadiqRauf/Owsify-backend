@@ -20,6 +20,10 @@ from app.core.email import Email
 DIVIDER = "─" * 68
 
 
+def _is_gmail(host: str) -> bool:
+    return host.lower().endswith(("smtp.gmail.com", "smtp.googlemail.com"))
+
+
 def _describe_config() -> None:
     print(DIVIDER)
     print("Current email configuration")
@@ -33,6 +37,10 @@ def _describe_config() -> None:
         print(f"  SMTP_PASSWORD : {'set, ' + str(len(settings.SMTP_PASSWORD)) + ' chars' if settings.SMTP_PASSWORD else '(empty)'}")
         print(f"  SMTP_USE_TLS  : {settings.SMTP_USE_TLS}")
         print(f"  SMTP_USE_SSL  : {settings.SMTP_USE_SSL}")
+        if _is_gmail(settings.SMTP_HOST):
+            length = len(settings.SMTP_PASSWORD)
+            verdict = "looks like an App Password" if length == 16 else "NOT 16 chars — Gmail wants an App Password"
+            print(f"  (Gmail)       : password is {length} chars, {verdict}")
     elif settings.EMAIL_BACKEND == "file":
         print(f"  EMAIL_FILE_PATH: {settings.EMAIL_FILE_PATH}")
     print(f"  FRONTEND_URL  : {settings.FRONTEND_URL}")
@@ -65,6 +73,38 @@ def _diagnose(error: Exception) -> str:
     # --- Provider policy: the reply reached us, it just said no ------------- #
     if isinstance(error, smtplib.SMTPAuthenticationError):
         detail = (error.smtp_error or b"").decode("utf-8", "replace").strip()
+
+        # Gmail returns one message for every credential problem, so the useful
+        # part is working out which of its three causes applies from the config.
+        if _is_gmail(host):
+            reasons = []
+            if "@" not in settings.SMTP_USER:
+                reasons.append(
+                    "SMTP_USER is not a full address — it must be the whole "
+                    f"you@gmail.com, not {settings.SMTP_USER!r}."
+                )
+            if len(settings.SMTP_PASSWORD) != 16:
+                reasons.append(
+                    "SMTP_PASSWORD is "
+                    f"{len(settings.SMTP_PASSWORD)} characters. A Google App "
+                    "Password is exactly 16 — if this is your normal Gmail "
+                    "password, Google has refused those since 2022."
+                )
+            return "\n".join(
+                [
+                    f"Google rejected the credentials (code {error.smtp_code}).",
+                    f"  {detail}",
+                    "",
+                    *(f"  → {reason}" for reason in reasons),
+                    "" if reasons else "",
+                    "Gmail needs an App Password, which needs 2-Step Verification on:",
+                    "  1. Turn on 2-Step Verification: https://myaccount.google.com/signinoptions/two-step-verification",
+                    "  2. Create an App Password:      https://myaccount.google.com/apppasswords",
+                    "  3. Put the 16 characters in SMTP_PASSWORD (spaces are stripped for you)",
+                    "     and your full Gmail address in SMTP_USER.",
+                ]
+            )
+
         return "\n".join(
             [
                 f"The server rejected the credentials (code {error.smtp_code}).",
@@ -94,6 +134,15 @@ def _diagnose(error: Exception) -> str:
             )
 
         if isinstance(error, smtplib.SMTPSenderRefused):
+            if _is_gmail(host):
+                return (
+                    f"Google refused the From address {settings.EMAIL_FROM!r}.\n"
+                    f"  {reply}\n\n"
+                    "Gmail only sends as the authenticated account. Set EMAIL_FROM to\n"
+                    f"  EMAIL_FROM=\"Owsify <{settings.SMTP_USER}>\"\n"
+                    "or add the address as a verified alias under Gmail → Settings →\n"
+                    "Accounts and Import → Send mail as."
+                )
             return (
                 f"The server refused the From address {settings.EMAIL_FROM!r}.\n"
                 f"  {reply}\n\n"

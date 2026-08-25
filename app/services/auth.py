@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import secrets
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update as sql_update
+from sqlalchemy import func, select, update as sql_update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -16,8 +18,10 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    hash_password,
     verify_password,
 )
+from app.models.password_reset import PasswordResetToken
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.schemas.auth import AuthResponse
@@ -128,3 +132,124 @@ def revoke_all_for_user(db: Session, user_id: uuid.UUID) -> int:
     )
     db.commit()
     return result.rowcount or 0
+
+
+# --------------------------------------------------------------------------- #
+# Password reset
+# --------------------------------------------------------------------------- #
+
+
+def _hash_reset_token(token: str) -> str:
+    """SHA-256, hex. See `models/password_reset.py` for why not bcrypt."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def request_password_reset(
+    db: Session,
+    email: str,
+    *,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> tuple[User, str] | None:
+    """Issue a reset token, or return None when there is nothing to issue one for.
+
+    Returning None rather than raising is deliberate: the endpoint must answer
+    identically whether or not the address has an account, so "no such user" cannot
+    be a distinguishable outcome at the API boundary. **Account enumeration is the
+    real risk in this flow** — a forgot-password form that says "no account found"
+    is a free tool for checking which of a leaked address list uses your app.
+
+    Returns the user and the *plain* token, which is emailed and never stored.
+    """
+    user = user_service.get_by_email(db, email)
+    if user is None or not user.is_active:
+        return None
+
+    window_start = datetime.now(UTC) - timedelta(
+        minutes=settings.PASSWORD_RESET_WINDOW_MINUTES
+    )
+    recent = (
+        db.scalar(
+            select(func.count())
+            .select_from(PasswordResetToken)
+            .where(
+                PasswordResetToken.user_id == user.id,
+                PasswordResetToken.created_at >= window_start,
+            )
+        )
+        or 0
+    )
+    if recent >= settings.PASSWORD_RESET_MAX_PER_WINDOW:
+        # Treated exactly like an unknown address: silently no-op. Telling the
+        # caller they are rate limited would confirm the account exists, which is
+        # the one thing this endpoint must not do.
+        return None
+
+    # Any older link is invalidated. Someone who asks again is telling you the
+    # first link did not reach them, and leaving several live at once widens the
+    # window for the wrong person to use one.
+    db.execute(
+        sql_update(PasswordResetToken)
+        .where(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+        )
+        .values(used_at=datetime.now(UTC))
+    )
+
+    token = secrets.token_urlsafe(32)
+    db.add(
+        PasswordResetToken(
+            token_hash=_hash_reset_token(token),
+            user_id=user.id,
+            expires_at=datetime.now(UTC)
+            + timedelta(minutes=settings.PASSWORD_RESET_EXPIRE_MINUTES),
+            requested_ip=ip,
+            user_agent=user_agent,
+        )
+    )
+    db.commit()
+
+    return user, token
+
+
+def _usable_reset_token(db: Session, token: str) -> PasswordResetToken:
+    stored = db.scalar(
+        select(PasswordResetToken).where(
+            PasswordResetToken.token_hash == _hash_reset_token(token)
+        )
+    )
+    # Expired, already used, and never existed are one message on purpose: telling
+    # them apart tells an attacker which guesses were once real tokens.
+    if stored is None or not stored.is_usable:
+        raise AuthenticationError("This reset link is invalid or has expired.")
+    return stored
+
+
+def check_reset_token(db: Session, token: str) -> User:
+    """Validate without consuming, so a reset page can fail before asking for input.
+
+    Making someone type a new password twice only to be told the link died is a bad
+    trade for one cheap request.
+    """
+    return _usable_reset_token(db, token).user
+
+
+def reset_password(db: Session, token: str, new_password: str) -> User:
+    """Set the new password, burn the token, and end every existing session.
+
+    Signing other sessions out is the point of the flow as much as the new password
+    is: a reset usually follows either a forgotten password or a suspected
+    compromise, and leaving the attacker's refresh token alive would make the reset
+    theatre.
+    """
+    stored = _usable_reset_token(db, token)
+    user = stored.user
+
+    user.hashed_password = hash_password(new_password)
+    stored.used_at = datetime.now(UTC)
+
+    revoke_all_for_user(db, user.id)
+    db.commit()
+    db.refresh(user)
+    return user

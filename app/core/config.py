@@ -1,5 +1,7 @@
 """Application settings, loaded from environment variables and the .env file."""
 
+import logging
+from email.utils import formataddr, parseaddr
 from functools import lru_cache
 from typing import Annotated, Literal
 
@@ -69,6 +71,16 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:5173"
     INVITATION_EXPIRE_DAYS: int = 14
 
+    # A reset link is a temporary password, so it is short-lived by design. Long
+    # enough to survive a slow mail server and a distracted user; short enough that
+    # a link left in an inbox is not a standing key to the account.
+    PASSWORD_RESET_EXPIRE_MINUTES: int = 60
+
+    # Sending mail on an unauthenticated endpoint is a spam vector aimed at other
+    # people's inboxes, so requests per address are capped over a window.
+    PASSWORD_RESET_MAX_PER_WINDOW: int = 3
+    PASSWORD_RESET_WINDOW_MINUTES: int = 15
+
     # --- CORS ---
     # NoDecode stops pydantic-settings from JSON-parsing the raw value, so the
     # validator below can accept a plain comma-separated list in .env.
@@ -106,6 +118,56 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"
+
+    @model_validator(mode="after")
+    def _normalise_gmail_smtp(self) -> "Settings":
+        """Make a Gmail account work the way people actually configure it.
+
+        Two things go wrong with Gmail specifically, and both are silent:
+
+        **App passwords are displayed with spaces.** Google shows a 16-character
+        app password as `abcd efgh ijkl mnop`, and pasting it verbatim fails with a
+        bare "Username and Password not accepted" that says nothing about spaces.
+        They are stripped for Gmail hosts only — an arbitrary provider could
+        legitimately have a space in a password, but Google's never do.
+
+        **Gmail refuses to send as anyone but the authenticated account.** Leaving
+        `EMAIL_FROM` as the default would mean either a rejection or, worse, Gmail
+        quietly rewriting the header so mail arrives from an address the app never
+        chose. Aligning it here — keeping the display name, replacing the address —
+        makes what is going to happen anyway explicit, and says so in the log.
+        """
+        if not self._is_gmail_smtp:
+            return self
+
+        if self.SMTP_PASSWORD:
+            stripped = "".join(self.SMTP_PASSWORD.split())
+            if stripped != self.SMTP_PASSWORD:
+                object.__setattr__(self, "SMTP_PASSWORD", stripped)
+
+        if self.SMTP_USER:
+            name, address = parseaddr(self.EMAIL_FROM)
+            if address.lower() != self.SMTP_USER.lower():
+                object.__setattr__(
+                    self,
+                    "EMAIL_FROM",
+                    formataddr((name or "Owsify", self.SMTP_USER)),
+                )
+                logging.getLogger(__name__).warning(
+                    "Gmail only sends as the authenticated account, so EMAIL_FROM "
+                    "was changed from %r to %r. Set EMAIL_FROM to your Gmail "
+                    "address (or a verified alias) to silence this.",
+                    address or self.EMAIL_FROM,
+                    self.SMTP_USER,
+                )
+
+        return self
+
+    @property
+    def _is_gmail_smtp(self) -> bool:
+        return self.EMAIL_BACKEND == "smtp" and self.SMTP_HOST.lower().endswith(
+            ("smtp.gmail.com", "smtp.googlemail.com")
+        )
 
     @model_validator(mode="after")
     def _refuse_unsafe_production_config(self) -> "Settings":

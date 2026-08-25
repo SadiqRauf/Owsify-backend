@@ -8,6 +8,7 @@ from app.models.invitation import Invitation, InvitationStatus
 from app.models.khata import KhataAccount, KhataEntry, KhataEntryType
 from app.models.loan import Loan, LoanDirection, LoanPayment, LoanStatus
 from app.models.note import Note, NoteSubject, Reminder, ReminderStatus
+from app.models.password_reset import PasswordResetToken
 from app.models.refresh_token import RefreshToken
 from app.models.settlement import PaymentMethod, Settlement
 from app.models.user import User
@@ -33,6 +34,7 @@ __all__ = [
     "LoanStatus",
     "Note",
     "NoteSubject",
+    "PasswordResetToken",
     "PaymentMethod",
     "RefreshToken",
     "Reminder",
