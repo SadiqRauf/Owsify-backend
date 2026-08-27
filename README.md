@@ -10,52 +10,44 @@
 * **Simplified Debt Graph:** Integrated balance minimization algorithms to reduce the total number of transactions needed to settle up.
 * **Group Management:** Organise expenses by trip, household, or project with multi-currency support.
 * **Real-time Balance Tracking:** Instantly see who owes whom at any given moment.
+* **Khata:** A private running ledger for one person, who does not need an account.
+* **Loans:** A fixed principal in either direction, paid down by its repayments.
+* **Notes, Reminders & Timeline:** The context around a balance, and one history per person.
+* **Reports:** Money in and out over any window, per currency, with charts.
 * **Activity & Ledger Logs:** Full historical audit trail of settled payments and edited transactions.
 
 ### 🛠️ Tech Stack
 
-* **Frontend:** React / React Native (TypeScript)
-* **Backend:** Node.js / Express (or your backend framework)
-* **Database:** PostgreSQL / MongoDB
+* **Frontend:** React 19 + TypeScript + Vite, Tailwind, TanStack Query
+* **Backend:** Python 3.13 + FastAPI + SQLAlchemy 2.0 + Alembic
+* **Database:** PostgreSQL 14+
 
 
-# Owsify — Backend
+## 🚀 Running locally
 
-FastAPI + PostgreSQL + SQLAlchemy 2.0 + Alembic, with JWT authentication.
+Three processes: PostgreSQL, the API, and the web app. Start them in that order —
+the API needs a database to migrate against, and the web app is useless without the
+API. Locally you apply migrations yourself, in step 2; only the Docker image runs
+them for you.
 
-## Requirements
+### 0. Prerequisites
 
-- Python 3.13
-- PostgreSQL 14+
+| Tool | Version | Check with |
+| --- | --- | --- |
+| Python | 3.13 | `python3 --version` |
+| Node | 20+ | `node --version` |
+| PostgreSQL | 14+ | `postgres --version` |
 
-## Setup
+### 1. Database
 
-```bash
-cd backend
-python3 -m venv venv
-./venv/bin/pip install -r requirements.txt
-cp .env.example .env          # then edit the values
-```
-
-Generate a real secret key before doing anything beyond local work:
-
-```bash
-./venv/bin/python -c "import secrets; print(secrets.token_urlsafe(64))"
-```
-
-## Database
-
-This project talks to a dedicated cluster on **port 5433** so it does not collide
-with any other PostgreSQL install on the machine.
+This project uses a **dedicated cluster on port 5433**, so it cannot collide with
+any other PostgreSQL already on the machine. One-time setup:
 
 ```bash
-# One-time: create the cluster
 initdb -D /usr/local/var/splitwise-pg -U dev --auth-local=trust --auth-host=trust -E UTF8
 
-# Start it
 pg_ctl -D /usr/local/var/splitwise-pg -o "-p 5433" -l /usr/local/var/splitwise-pg/server.log start
 
-# One-time: role and databases
 psql -h 127.0.0.1 -p 5433 -U dev -d postgres <<'SQL'
 CREATE ROLE splitwise WITH LOGIN PASSWORD 'splitwise' CREATEDB;
 CREATE DATABASE splitwise OWNER splitwise;
@@ -63,7 +55,201 @@ CREATE DATABASE splitwise_test OWNER splitwise;
 SQL
 ```
 
+Every time after that, just start it:
+
+```bash
+pg_ctl -D /usr/local/var/splitwise-pg -o "-p 5433" start
+```
+
 Stop it with `pg_ctl -D /usr/local/var/splitwise-pg stop`.
+
+### 2. Backend — <http://localhost:8000>
+
+```bash
+cd backend
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+
+cp .env.example .env
+# Generate a real signing key and paste it in as SECRET_KEY:
+./venv/bin/python -c "import secrets; print(secrets.token_urlsafe(64))"
+
+./venv/bin/alembic upgrade head     # create the tables
+./venv/bin/uvicorn app.main:app --reload
+```
+
+The defaults in `.env.example` already point at the cluster above, so the only
+value you need to change is `SECRET_KEY`.
+
+### 3. Frontend — <http://localhost:5173>
+
+In a second terminal:
+
+```bash
+cd frontend
+npm install
+cp .env.example .env     # already points at http://localhost:8000/api/v1
+npm run dev
+```
+
+### 4. Check it works
+
+Open <http://localhost:5173>, register an account, and you should land on the
+dashboard. If the page loads but every request fails, the API is not running or
+`VITE_API_URL` does not match where it is listening.
+
+| URL | What |
+| --- | --- |
+| <http://localhost:5173> | The web app |
+| <http://localhost:8000/docs> | Swagger UI, with a working **Authorize** button |
+| <http://localhost:8000/api/v1/health> | Health + database connectivity |
+
+### Everything at once, with Docker
+
+If you would rather not install Python, Node and Postgres separately:
+
+```bash
+docker compose up --build      # from the repository root
+```
+
+Three containers: `db`, `api` and `web`. The entrypoint waits for PostgreSQL and
+runs `alembic upgrade head` before the API starts, so replicas cannot race a
+half-applied schema.
+
+| URL | What |
+| --- | --- |
+| <http://localhost:8080> | The web app (**not** 5173 — that is the Vite dev server) |
+| <http://localhost:8000> | The API |
+
+Override the ports with `WEB_PORT`, `API_PORT` and `POSTGRES_PORT`. See
+[Production](#production) for what the image does differently from the dev setup.
+
+### Troubleshooting
+
+| Symptom | Cause |
+| --- | --- |
+| `connection refused` on port 5433 | The cluster is not running — `pg_ctl … start` |
+| `password authentication failed` | `POSTGRES_*` in `backend/.env` disagrees with the role you created |
+| API starts but every request 500s | Migrations not applied — `alembic upgrade head` |
+| Web app loads, all requests fail | API not running, or `VITE_API_URL` points somewhere else |
+| `SECRET_KEY` startup crash | Only in `ENVIRONMENT=production`; generate a real key |
+
+---
+
+# Owsify — Backend
+
+FastAPI + PostgreSQL + SQLAlchemy 2.0 + Alembic, with JWT authentication.
+
+The rest of this file is backend reference: how each subsystem works and why it is
+built that way. For getting the app running, the section above is all you need.
+
+## Requirements
+
+- Python 3.13
+- PostgreSQL 14+
+
+Installing and starting both is covered in [Running locally](#-running-locally)
+above; it is not repeated here, so there is only ever one set of instructions to
+keep correct.
+
+## Configuration
+
+`.env` is git-ignored; `.env.example` is the documented template and lists every
+setting with its default. The values that matter most:
+
+| Setting | Default | Notes |
+| --- | --- | --- |
+| `SECRET_KEY` | a placeholder | Must be replaced. Signs every token. |
+| `POSTGRES_PORT` | `5433` | The dedicated cluster, not a system-wide 5432 |
+| `ENVIRONMENT` | `development` | `production` enables the startup safety checks |
+| `BCRYPT_ROUNDS` | `12` | The test suite drops this to 4 for speed |
+| `CORS_ORIGINS` | the Vite dev server | Comma-separated; `*` is refused in production |
+
+Either set the discrete `POSTGRES_*` values or set `DATABASE_URL` to override them
+all.
+
+## Sending email
+
+Four backends, chosen with `EMAIL_BACKEND`:
+
+| Backend | What it does | Use when |
+| --- | --- | --- |
+| `console` | Logs the message | Default, and what the test suite forces |
+| `file` | Writes `.eml` files to `EMAIL_FILE_PATH` | You want to click the link locally |
+| `smtp` | Actually sends | Everything else |
+
+`send_email` never raises. A failed send is logged and reported as `False`, because
+an outage in the mail provider must not take a request down with it.
+
+The test suite **forces** `console` in `conftest.py` rather than defaulting to it.
+The developer `.env` sets `smtp`, and without the override every test that sends mail
+opened a real connection to the provider — slow, network-dependent, and a source of
+genuine outbound mail from a test run.
+
+### Gmail
+
+Gmail works through the ordinary SMTP backend, but two things about it fail silently
+and are handled for you.
+
+**It needs an App Password, not your password.** Google stopped accepting account
+passwords over SMTP in 2022, and an App Password requires 2-Step Verification first:
+
+1. Turn on 2-Step Verification — <https://myaccount.google.com/signinoptions/two-step-verification>
+2. Create an App Password — <https://myaccount.google.com/apppasswords>
+3. Put the 16 characters in `SMTP_PASSWORD`
+
+```bash
+EMAIL_BACKEND=smtp
+EMAIL_FROM="Owsify <you@gmail.com>"
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=you@gmail.com          # the full address
+SMTP_PASSWORD=abcdefghijklmnop   # the App Password
+SMTP_USE_TLS=true
+SMTP_USE_SSL=false
+```
+
+Port 465 works too, with the flags the other way round (`SMTP_USE_SSL=true`,
+`SMTP_USE_TLS=false`). Both are verified to connect and negotiate TLS.
+
+Google displays an App Password as `abcd efgh ijkl mnop`. Pasted verbatim the spaces
+break the login, and the only feedback is a bare "Username and Password not
+accepted" that never mentions them — so **spaces are stripped for Gmail hosts**.
+Only Gmail's, because another provider could legitimately have a space in a
+password.
+
+**Gmail only sends as the account you authenticated with.** If `EMAIL_FROM` is any
+other address, the app rewrites it to `SMTP_USER` and logs a warning. Doing it here
+rather than leaving it means the address the app believes it used is the address that
+actually goes out — otherwise Google either rewrites the header itself, silently, or
+refuses the message. To send as something else, add it under Gmail → Settings →
+Accounts and Import → *Send mail as* first.
+
+Free Gmail allows roughly 500 recipients a day and Workspace 2,000. That is fine for
+development and light use; past it, a transactional provider is the answer.
+
+### When it does not work
+
+```bash
+./venv/bin/python -m app.cli.send_test_email you@example.com
+```
+
+This prints the live configuration and turns the failure into a next step. SMTP
+errors are famously opaque — Google answers every credential problem with the same
+"Username and Password not accepted" — so the tool works out which cause applies
+from the config and says so:
+
+```
+Google rejected the credentials (code 535).
+  5.7.8 Username and Password not accepted. …
+
+  → SMTP_PASSWORD is 13 characters. A Google App Password is exactly 16 — if this
+    is your normal Gmail password, Google has refused those since 2022.
+```
+
+The ordering inside `_diagnose` is deliberate and not obvious: both `SMTPException`
+and `SSLError` subclass `OSError`, so the specific cases must be matched before any
+generic connection branch or they get the wrong explanation.
 
 ## Migrations
 
@@ -88,6 +274,8 @@ migrations always target the same database the app uses.
 | <http://localhost:8000/docs> | Swagger UI (has a working **Authorize** button) |
 | <http://localhost:8000/redoc> | ReDoc |
 | <http://localhost:8000/api/v1/health> | Health + database check |
+
+Both docs routes are disabled when `ENVIRONMENT=production`.
 
 ## Tests
 

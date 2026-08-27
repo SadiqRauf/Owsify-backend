@@ -11,6 +11,13 @@ import os
 # 4 rounds is the library minimum and keeps the hashing path itself under test.
 os.environ.setdefault("BCRYPT_ROUNDS", "4")
 
+# Forced, not `setdefault`: the developer .env sets EMAIL_BACKEND=smtp, and without
+# this every test that sends mail opens a real connection to the mail provider. That
+# makes the suite slow, dependent on the network, and — worse — a source of genuine
+# outbound mail from a test run. The console backend exercises the same code path
+# up to the transport.
+os.environ["EMAIL_BACKEND"] = "console"
+
 from collections.abc import Callable, Generator  # noqa: E402
 from dataclasses import dataclass
 
@@ -196,7 +203,8 @@ def _reset_tables(db: Session) -> Generator[None, None, None]:
     yield
     db.execute(
         text(
-            "TRUNCATE reminders, notes, loan_payments, loans, khata_entries, khata_accounts, "
+            "TRUNCATE password_reset_tokens, reminders, notes, loan_payments, loans, "
+            "khata_entries, khata_accounts, "
             "settlements, expense_splits, "
             "expenses, group_members, groups, friendships, invitations, "
             "refresh_tokens, users RESTART IDENTITY CASCADE"
