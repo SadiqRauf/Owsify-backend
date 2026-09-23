@@ -16,6 +16,7 @@ from app.api.v1.endpoints import (
     khata_entries,
     loans,
     notes,
+    notifications,
     people,
     reports,
     settlements,
@@ -46,6 +47,7 @@ api_router.include_router(loans.payment_router)
 api_router.include_router(loans.router)
 api_router.include_router(notes.notes_router)
 api_router.include_router(notes.reminders_router)
+api_router.include_router(notifications.router)
 api_router.include_router(people.router)
 api_router.include_router(activity.router)
 api_router.include_router(analytics.router)

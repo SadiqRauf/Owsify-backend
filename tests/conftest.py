@@ -203,7 +203,7 @@ def _reset_tables(db: Session) -> Generator[None, None, None]:
     yield
     db.execute(
         text(
-            "TRUNCATE password_reset_tokens, reminders, notes, loan_payments, loans, "
+            "TRUNCATE notifications, password_reset_tokens, reminders, notes, loan_payments, loans, "
             "khata_entries, khata_accounts, "
             "settlements, expense_splits, "
             "expenses, group_members, groups, friendships, invitations, "

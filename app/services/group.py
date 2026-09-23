@@ -15,8 +15,10 @@ from app.core.exceptions import (
 )
 from app.models.expense import Expense, ExpenseSplit
 from app.models.group import Group, GroupMember, GroupRole
+from app.models.notification import NotificationType
 from app.models.user import User
 from app.schemas.group import GroupCreate, GroupMemberAdd, GroupUpdate
+from app.services import notification as notification_service
 from app.services import user as user_service
 
 
@@ -73,6 +75,9 @@ def create(db: Session, creator: User, payload: GroupCreate) -> Group:
         group.members.append(GroupMember(user_id=user_id, role=GroupRole.MEMBER))
 
     db.add(group)
+    db.flush()
+    for member in group.members:
+        _notify(db, group, member.user_id, creator.id, NotificationType.GROUP_ADDED)
     db.commit()
     db.refresh(group)
     return group
@@ -94,6 +99,8 @@ def delete(db: Session, group: Group, user_id: uuid.UUID) -> None:
     if membership.role is not GroupRole.OWNER:
         raise PermissionDeniedError("Only the group owner can delete a group.")
 
+    for member in group.members:
+        _notify(db, group, member.user_id, user_id, NotificationType.GROUP_DELETED)
     db.delete(group)
     db.commit()
 
@@ -120,6 +127,7 @@ def add_members(db: Session, group: Group, actor_id: uuid.UUID, payload: GroupMe
         if user.id in existing_ids:
             continue
         group.members.append(GroupMember(user_id=user.id, role=payload.role))
+        _notify(db, group, user.id, actor_id, NotificationType.GROUP_ADDED)
         existing_ids.add(user.id)
         added += 1
 
@@ -154,6 +162,8 @@ def remove_member(db: Session, group: Group, actor_id: uuid.UUID, target_id: uui
         )
 
     group.members.remove(target)
+    # Leaving on your own is not news to you; being removed is.
+    _notify(db, group, target_id, actor_id, NotificationType.GROUP_REMOVED)
     db.commit()
     db.refresh(group)
     return group
@@ -170,7 +180,9 @@ def set_role(db: Session, group: Group, actor_id: uuid.UUID, target_id: uuid.UUI
     if target.role is GroupRole.OWNER:
         raise BadRequestError("Transfer ownership instead of changing the owner's role.")
 
-    target.role = role
+    if target.role is not role:
+        target.role = role
+        _notify(db, group, target_id, actor_id, NotificationType.GROUP_ROLE_CHANGED, role=role.value)
     db.commit()
     db.refresh(group)
     return group
@@ -189,9 +201,27 @@ def transfer_ownership(db: Session, group: Group, actor_id: uuid.UUID, target_id
 
     actor.role = GroupRole.ADMIN
     target.role = GroupRole.OWNER
+    _notify(db, group, target.user_id, actor_id, NotificationType.GROUP_OWNERSHIP_TRANSFERRED)
     db.commit()
     db.refresh(group)
     return group
+
+
+def _notify(
+    db: Session,
+    group: Group,
+    recipient_id: uuid.UUID,
+    actor_id: uuid.UUID,
+    type: NotificationType,
+    **extra: object,
+) -> None:
+    notification_service.notify(
+        db,
+        recipient_id,
+        actor_id=actor_id,
+        type=type,
+        data=notification_service.group_data(group, **extra),
+    )
 
 
 def _has_unsettled_activity(db: Session, group_id: uuid.UUID, user_id: uuid.UUID) -> bool:

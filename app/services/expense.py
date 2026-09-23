@@ -17,10 +17,12 @@ from app.core.exceptions import (
 )
 from app.models.expense import Expense, ExpenseSplit, SplitType
 from app.models.group import Group, GroupMember
+from app.models.notification import NotificationType
 from app.models.user import User
 from app.schemas.expense import ExpenseCreate, ExpenseUpdate, SplitParticipant
 from app.services import friendship as friendship_service
 from app.services import group as group_service
+from app.services import notification as notification_service
 from app.services.splits import SplitInput, compute_splits
 
 ZERO = Decimal("0.00")
@@ -154,6 +156,19 @@ def _replace_splits(db: Session, expense: Expense, new_splits: list[ExpenseSplit
 # --------------------------------------------------------------------------- #
 # Commands
 # --------------------------------------------------------------------------- #
+def _people_on(expense: Expense) -> set[uuid.UUID]:
+    """Everyone whose balance this expense touches: the payer and every split."""
+    return {expense.paid_by_id} | {split.user_id for split in expense.splits}
+
+
+def _positions(expense: Expense) -> dict[uuid.UUID, tuple[bool, Decimal]]:
+    """Per person: did they pay, and what is their share. What an edit is judged by."""
+    return {
+        user_id: (user_id == expense.paid_by_id, expense.share_for(user_id))
+        for user_id in _people_on(expense)
+    }
+
+
 def create(db: Session, actor: User, payload: ExpenseCreate) -> Expense:
     group: Group | None = None
     if payload.group_id is not None:
@@ -178,6 +193,15 @@ def create(db: Session, actor: User, payload: ExpenseCreate) -> Expense:
     expense.splits = _build_splits(payload.amount, payload.split_type, payload.splits)
 
     db.add(expense)
+    db.flush()
+    for user_id in _people_on(expense):
+        notification_service.notify(
+            db,
+            user_id,
+            actor_id=actor.id,
+            type=NotificationType.EXPENSE_ADDED,
+            data=notification_service.expense_data(expense, user_id),
+        )
     db.commit()
     db.refresh(expense)
     return expense
@@ -185,6 +209,7 @@ def create(db: Session, actor: User, payload: ExpenseCreate) -> Expense:
 
 def update(db: Session, expense: Expense, actor: User, payload: ExpenseUpdate) -> Expense:
     _require_edit_rights(db, expense, actor)
+    before = _positions(expense)
 
     data = payload.model_dump(exclude_unset=True)
     split_participants = payload.splits
@@ -234,6 +259,19 @@ def update(db: Session, expense: Expense, actor: User, payload: ExpenseUpdate) -
         ]
         _replace_splits(db, expense, _build_splits(new_amount, split_type, carried))
 
+    db.flush()
+    after = _positions(expense)
+    # Only the people whose money moved. Fixing a typo in the description is not
+    # worth interrupting anyone for.
+    for user_id in before.keys() | after.keys():
+        if before.get(user_id) != after.get(user_id):
+            notification_service.notify(
+                db,
+                user_id,
+                actor_id=actor.id,
+                type=NotificationType.EXPENSE_UPDATED,
+                data=notification_service.expense_data(expense, user_id),
+            )
     db.commit()
     db.refresh(expense)
     return expense
@@ -241,6 +279,14 @@ def update(db: Session, expense: Expense, actor: User, payload: ExpenseUpdate) -
 
 def delete(db: Session, expense: Expense, actor: User) -> None:
     _require_edit_rights(db, expense, actor)
+    for user_id in _people_on(expense):
+        notification_service.notify(
+            db,
+            user_id,
+            actor_id=actor.id,
+            type=NotificationType.EXPENSE_DELETED,
+            data=notification_service.expense_data(expense, user_id),
+        )
     db.delete(expense)
     db.commit()
 

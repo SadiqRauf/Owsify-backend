@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.models.friendship import Friendship, FriendshipStatus
+from app.models.notification import NotificationType
 from app.models.user import User
 from app.schemas.friendship import FriendRequestCreate
+from app.services import notification as notification_service
 from app.services import user as user_service
 
 
@@ -70,12 +72,18 @@ def send_request(db: Session, sender: User, payload: FriendRequestCreate) -> Fri
         existing.addressee_id = target.id
         existing.status = FriendshipStatus.PENDING
         existing.responded_at = None
+        notification_service.notify(
+            db, target.id, actor_id=sender.id, type=NotificationType.FRIEND_REQUEST
+        )
         db.commit()
         db.refresh(existing)
         return existing
 
     friendship = Friendship(requester_id=sender.id, addressee_id=target.id)
     db.add(friendship)
+    notification_service.notify(
+        db, target.id, actor_id=sender.id, type=NotificationType.FRIEND_REQUEST
+    )
     db.commit()
     db.refresh(friendship)
     return friendship
@@ -96,6 +104,15 @@ def respond(db: Session, friendship: Friendship, user_id: uuid.UUID, *, accept: 
 
     friendship.status = FriendshipStatus.ACCEPTED if accept else FriendshipStatus.REJECTED
     friendship.responded_at = datetime.now(UTC)
+    # A rejection is deliberately silent: telling someone they were turned down
+    # helps nobody, and the request simply stops being pending on their side.
+    if accept:
+        notification_service.notify(
+            db,
+            friendship.requester_id,
+            actor_id=user_id,
+            type=NotificationType.FRIEND_ACCEPTED,
+        )
     db.commit()
     db.refresh(friendship)
     return friendship

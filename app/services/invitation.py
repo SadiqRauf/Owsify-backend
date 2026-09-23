@@ -20,7 +20,9 @@ from app.core.email import Email, send_email
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.models.friendship import Friendship, FriendshipStatus
 from app.models.invitation import Invitation, InvitationStatus
+from app.models.notification import NotificationType
 from app.models.user import User
+from app.services import notification as notification_service
 from app.services import user as user_service
 
 logger = logging.getLogger(__name__)
@@ -208,6 +210,13 @@ def redeem_for_new_user(db: Session, new_user: User) -> int:
 
         if invitation.invited_by_id == new_user.id:
             continue
+
+        notification_service.notify(
+            db,
+            invitation.invited_by_id,
+            actor_id=new_user.id,
+            type=NotificationType.INVITATION_ACCEPTED,
+        )
 
         # A friendship may already exist if two people invited the same address and
         # one of them was also befriended another way.

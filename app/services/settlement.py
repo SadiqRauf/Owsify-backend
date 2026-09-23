@@ -14,12 +14,14 @@ from app.core.exceptions import (
     UnprocessableEntityError,
 )
 from app.models.group import Group
+from app.models.notification import NotificationType
 from app.models.settlement import Settlement
 from app.models.user import User
 from app.schemas.settlement import SettlementCreate, SettlementUpdate
 from app.services import balance as balance_service
 from app.services import friendship as friendship_service
 from app.services import group as group_service
+from app.services import notification as notification_service
 
 
 def _visible_to(user_id: uuid.UUID):
@@ -106,9 +108,19 @@ def create(db: Session, actor: User, payload: SettlementCreate) -> Settlement:
         created_by_id=actor.id,
     )
     db.add(settlement)
+    db.flush()
+    _notify_parties(db, settlement, actor, NotificationType.SETTLEMENT_RECORDED)
     db.commit()
     db.refresh(settlement)
     return settlement
+
+
+def _notify_parties(
+    db: Session, settlement: Settlement, actor: User, type: NotificationType
+) -> None:
+    data = notification_service.settlement_data(settlement)
+    for user_id in {settlement.from_user_id, settlement.to_user_id}:
+        notification_service.notify(db, user_id, actor_id=actor.id, type=type, data=data)
 
 
 def _require_edit_rights(settlement: Settlement, user: User) -> None:
@@ -120,10 +132,14 @@ def _require_edit_rights(settlement: Settlement, user: User) -> None:
 
 def update(db: Session, settlement: Settlement, actor: User, payload: SettlementUpdate) -> Settlement:
     _require_edit_rights(settlement, actor)
+    previous_amount = settlement.amount
 
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(settlement, field, value)
 
+    # A changed amount moves the balance; a changed note or method does not.
+    if settlement.amount != previous_amount:
+        _notify_parties(db, settlement, actor, NotificationType.SETTLEMENT_UPDATED)
     db.commit()
     db.refresh(settlement)
     return settlement
@@ -131,6 +147,7 @@ def update(db: Session, settlement: Settlement, actor: User, payload: Settlement
 
 def delete(db: Session, settlement: Settlement, actor: User) -> None:
     _require_edit_rights(settlement, actor)
+    _notify_parties(db, settlement, actor, NotificationType.SETTLEMENT_DELETED)
     db.delete(settlement)
     db.commit()
 
